@@ -12,16 +12,22 @@ import icm20948
 
 main:
   bus := i2c.Bus
-    --sda=gpio.Pin 21
-    --scl=gpio.Pin 22
+    --sda=gpio.Pin 8
+    --scl=gpio.Pin 9
+    --frequency=400_000
+
+  bus-device-count := bus.scan.size
+  if not (bus.test icm20948.Driver.AK09916-I2C-ADDRESS):
+    print "Bus scan has $bus-device-count devices"
 
   device := bus.device icm20948.I2C-ADDRESS-ALT
-
   sensor := icm20948.Driver device
-
   sensor.on
   sensor.configure-accel
   sensor.configure-gyro
+
+  sensor.
+
   while true:
     print "Acceleration: $sensor.read-accel"
     print "Gyroscope: $sensor.read-gyro"

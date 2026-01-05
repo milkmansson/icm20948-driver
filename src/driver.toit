@@ -362,7 +362,7 @@ class Driver:
   /**
   Enable AK09916 magnetometer registers.
   */
-  mag-setup_ -> none:
+  mag-setup -> none:
     set-align-odr_ true
     reset-i2c-master_
     set-i2c-master_ true
