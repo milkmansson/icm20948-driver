@@ -35,7 +35,15 @@ class Driver:
   static REGISTER-PWR-MGMT-1_     ::= 0x06
   static REGISTER-PWR-MGMT-2_     ::= 0x07
   static REGISTER-INT-PIN-CFG_    ::= 0x0F
+  static REGISTER-INT-ENABLE      ::= 0x10
+  static REGISTER-INT-ENABLE-1    ::= 0x11
+  static REGISTER-INT-ENABLE-2    ::= 0x12
+  static REGISTER-INT-ENABLE-3    ::= 0x13
+  static REGISTER-I2C-MST-STATUS  ::= 0x17
+  static REGISTER-INT-STATUS      ::= 0x19
   static REGISTER-INT-STATUS-1_   ::= 0x1A
+  static REGISTER-INT-STATUS-2    ::= 0x1B
+  static REGISTER-INT-STATUS-3    ::= 0x1C
   static REGISTER-ACCEL-XOUT-H_   ::= 0x2D
   static REGISTER-ACCEL-XOUT-L_   ::= 0x2E
   static REGISTER-ACCEL-YOUT-H_   ::= 0x2F
@@ -48,6 +56,22 @@ class Driver:
   static REGISTER-GYRO-YOUT-L_    ::= 0x36
   static REGISTER-GYRO-ZOUT-H_    ::= 0x37
   static REGISTER-GYRO-ZOUT-L_    ::= 0x38
+
+  static REGISTER-EXT-SLV-DATA-00_ ::= 0x3b
+  static REGISTER-EXT-SLV-DATA-01_ ::= 0x3c
+  static REGISTER-EXT-SLV-DATA-02_ ::= 0x3d
+  //...
+  static REGISTER-EXT-SLV-DATA-23_ ::= 0x52
+
+  static REGISTER-FIFO-EN-1        ::= 0x66
+  static REGISTER-FIFO-EN-2        ::= 0x67
+  static REGISTER-FIFO-RST         ::= 0x68
+  static REGISTER-FIFO-MODE        ::= 0x69
+  static REGISTER-FIFO-COUNT       ::= 0x70
+  static REGISTER-FIFO-R-W         ::= 0x72
+  static REGISTER-DATA-RDY-STATUS  ::= 0x74
+  static REGISTER-FIFO-CFG         ::= 0x76
+
 
   // Masks: $REGISTER-USER-CTRL_
   static USER-CTRL-DMP-EN_      ::= 0b10000000
@@ -76,6 +100,13 @@ class Driver:
   static REGISTER-I2C-MST-CTRL_       ::= 0x01
   static REGISTER-I2C-MST-DELAY-CTRL_ ::= 0x02
 
+  // Slave read/write engines:
+  // SLV0–SLV3: continuous / automatic reads - Repeatedly read data from the
+  //   external sensors and deposit it into Bank 0 $REGISTER-EXT-SLV-DATA-00_
+  //   through to REGISTER-EXT-SLV-DATA-00_23.
+  // SLV4: one-shot command channel - Perform single, blocking I²C transactions
+  //   (writes or reads).  Result goes into $REGISTER-I2C-SLV4-DI_.
+  //   Must wait for 'DONE' from I2C_MST_STATUS.
   static REGISTER-I2C-SLV0-ADDR_      ::= 0x03  // R/W and PHY address of I2C Slave x.
   static REGISTER-I2C-SLV0-REG_       ::= 0x04  // I2C slave x register address from where to begin data transfer.
   static REGISTER-I2C-SLV0-CTRL_      ::= 0x05  //
@@ -118,7 +149,7 @@ class Driver:
   static I2C-MST-CLK_     ::= 0b00001111 // To use 400 kHz, MAX, it is recommended to set I2C-MST-CLK_ to 7.
 
   // Masks: REGISTER-I2C-SLVx-ADDR_ [x=0..4]
-  static I2C-SLVx-ADDR-RW_     ::= 0b10000000  // Transfer is R or W for slave x
+  static I2C-SLVx-ADDR-R_      ::= 0b10000000  // 1 = transfer is R for slave x
   static I2C-SLVx-ADDR-I2C-ID_ ::= 0b01111111  // PHY address of I2C slave x
 
   // Masks: REGISTER-I2C-SLVx-CTRL_ [x=0..4]
@@ -127,6 +158,14 @@ class Driver:
   static I2C-SLVx-CTRL-REG-DIS_ ::= 0b00100000  // Disables writing the register value - when set it will only read/write data.
   static I2C-SLVx-CTRL-GRP_     ::= 0b00010000  // Whether 16 bit byte reads are 00..01 or 01..02.
   static I2C-SLVx-CTRL-LENG_    ::= 0b00001111  // Number of bytes to be read from I2C slave X.
+
+  // Masks: REGISTER-I2C-MST-DELAY-CTRL_
+  static I2C-MST-DELAY-ES-SHADOW_ ::= 0b10000000
+  static I2C-MST-DELAY-SLV4-EN_   ::= 0b00010000
+  static I2C-MST-DELAY-SLV3-EN_   ::= 0b00001000
+  static I2C-MST-DELAY-SLV2-EN_   ::= 0b00000100
+  static I2C-MST-DELAY-SLV1-EN_   ::= 0b00000010
+  static I2C-MST-DELAY-SLV0-EN_   ::= 0b00000001
 
   // Register Map for AK09916
   static REG-AK09916-DEV-ID_    ::= 0x01  // R 1 Device ID.
@@ -334,6 +373,67 @@ class Driver:
     set-bank_ 3
     write-register_ REGISTER-I2C-MST-ODR-CONFIG_ odr
 
+  set-i2c-master-delay_ slave/int enable/bool -> none:
+    assert: 0 <= slave <= 4
+    set-bank_ 3
+    mask := 1 << slave
+    value := 0
+    if enable: value = 1
+    write-register_ REGISTER-I2C-MST-DELAY-CTRL_ value --mask=mask
+
+  shadow-sensor-only-when-complete enable/bool -> none:
+    set-bank_ 3
+    value := 0
+    if enable: value = 1
+    write-register_ REGISTER-I2C-MST-DELAY-CTRL_ 1 --mask=I2C-MST-DELAY-ES-SHADOW_
+
+  /**
+  Enable AK09916 magnetometer registers.
+  */
+  configure-mag -> none:
+    set-align-odr_ true
+    set-i2c-bypass-mux_ false
+    set-i2c-master_ false
+    reset-i2c-master_
+    set-i2c-master_ true
+    set-i2c-bus-speed_ 0x07
+    set-i2c-master-duty-cycle-mode_ true
+    set-i2c-master-duty-odr_ 0x03          // ODR to 137Hz
+    set-i2c-master-delay_ 0 true
+
+    // Reset Magnetometer Slave:
+    write-i2c-slave_ 0
+      --i2c-addr=AK09916-I2C-ADDRESS
+      --i2c-reg=REG-AK09916-CONTROL-3_
+      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x01) // 0x01 = I2C-SLVx-CTRL-LENG_ of 1
+      --i2c-data=AK09916-CONTROL-3-SRST_
+    sleep --ms=25
+
+    // Put magnetometer into continuous mode 4:
+    write-i2c-slave_ 0
+      --i2c-addr=AK09916-I2C-ADDRESS
+      --i2c-reg=REG-AK09916-CONTROL-2_
+      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x01) // 0x01 = I2C-SLVx-CTRL-LENG_ of 1
+      --i2c-data=AK09916-CONTROL-2-MODE4_
+
+    // Set which register gets read & number of bytes (ODR handles continuous reading):
+    write-i2c-slave_ 0
+      --i2c-addr=AK09916-I2C-ADDRESS | 0b10000000  // R
+      --i2c-reg=REG-AK09916-STATUS-1_
+      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x09) // 0x01 = I2C-SLVx-CTRL-LENG_ of 9
+
+  read-mag -> math.Point3f:
+    set-bank_ 0
+    while true:
+      rdy := read-register_ REGISTER-EXT-SLV-DATA-00_
+      if rdy == 1: break
+      sleep --ms=1
+
+    return read-point_ REGISTER-EXT-SLV-DATA-00_ 1.0
+
+  dump-bytes addr/int length/int -> ByteArray:
+    return (reg_.read-bytes addr 16)
+
   /*
   static I2C-SLVx-CTRL-EN_      ::= 0b10000000  // Enable reading data from this slave at the sample rate and storing data at the first available EXT_SENS_DATA register, which is always EXT_SENS_DATA_00 for I 2C slave 0
   static I2C-SLVx-CTRL-BYTE-SW_ ::= 0b01000000  // 1 – Swap bytes when reading both the low and high byte of a word.
@@ -341,12 +441,12 @@ class Driver:
   static I2C-SLVx-CTRL-GRP_     ::= 0b00010000  // Whether 16 bit byte reads are 00..01 or 01..02.
   static I2C-SLVx-CTRL-LENG_    ::= 0b00001111  // Number of bytes to be read from I2C slave X.
   */
-  write-i2c-slave_ slave/int
-      --i2c-addr/int
+  write-i2c-slave_ slave/int=0
+      --i2c-addr/int=AK09916-I2C-ADDRESS
       --i2c-reg/int
       --i2c-ctrl/int
       --i2c-data/int?=null:
-    assert: 1 <= slave <= 4
+    assert: 0 <= slave <= 4
     set-bank_ 3
     i2c-slave-addr := REGISTER-I2C-SLV0-ADDR_ + (4 * slave)    // R/W and PHY address of I2C Slave x.
     i2c-slave-reg  := i2c-slave-addr + 1                       // I2C slave x register address from where to begin data transfer.
@@ -357,56 +457,41 @@ class Driver:
     if i2c-data != null:
       write-register_ i2c-slave-data i2c-data
     write-register_ i2c-slave-ctrl i2c-ctrl
-    sleep --ms=50
 
-  /**
-  Enable AK09916 magnetometer registers.
-  */
-  mag-setup -> none:
-    set-align-odr_ true
-    reset-i2c-master_
-    set-i2c-master_ true
-    set-i2c-bus-speed_ 0x07
-    set-i2c-master-duty-cycle-mode_ true
-    set-i2c-master-duty-odr_ 0x03          // ODR to 137Hz
-
-    // Reset Magnetometer Slave:
-    write-i2c-slave_ 0
-      --i2c-addr=AK09916-I2C-ADDRESS
-      --i2c-reg=REG-AK09916-CONTROL-3_
-      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x01) // 0x01 = I2C-SLVx-CTRL-LENG_ of 1
-      --i2c-data=AK09916-CONTROL-3-SRST_
-
-    // Put magnetometer into continuous mode 4:
-    write-i2c-slave_ 0
-      --i2c-addr=AK09916-I2C-ADDRESS
-      --i2c-reg=REG-AK09916-CONTROL-2_
-      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x01) // 0x01 = I2C-SLVx-CTRL-LENG_ of 1
-      --i2c-data=AK09916-CONTROL-2-MODE4_
-
-    // Read register once, ODR handles continuous reading:
-    write-i2c-slave_ 0
-      --i2c-addr=AK09916-I2C-ADDRESS | 0b10000000  // R
-      --i2c-reg=REG-AK09916-STATUS-1_
-      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x09) // 0x01 = I2C-SLVx-CTRL-LENG_ of 9
-
-    tries := 5
-    while (reg_.read-u8 REGISTER-WHO-AM-I_) != WHO-AM-I_:
-      tries--
-      if tries == 0: throw "INVALID_CHIP"
-      sleep --ms=1
-
-  /*
+  read-i2c-slave-v1_ slave/int=0
+      --i2c-addr/int=AK09916-I2C-ADDRESS
+      --i2c-reg/int
+      --i2c-ctrl/int:
+    assert: 0 <= slave <= 4
+    set-bank_ 3
+    i2c-slave-addr := REGISTER-I2C-SLV0-ADDR_ + (4 * slave) | I2C-SLVx-ADDR-R_  // R/W and PHY address of I2C Slave x.
+    i2c-slave-reg  := i2c-slave-addr + 1                       // I2C slave x register address from where to begin data transfer.
+    i2c-slave-ctrl := i2c-slave-addr + 2                       // BITMASK
+    i2c-slave-data := i2c-slave-addr + 3                       // Data out when slave x is set to write.
+    write-register_ i2c-slave-addr i2c-addr
+    write-register_ i2c-slave-reg i2c-reg
+    //if i2c-data != null:
+    //  write-register_ i2c-slave-data i2c-data
+    write-register_ i2c-slave-ctrl i2c-ctrl
 
 
-  SPI_write(ICM_REG_BANK_SEL, ICM_BANK_0);
-  HAL_Delay(5);
+  read-slave_ -> int // only as slave 4
+      --i2c-addr/int=AK09916-I2C-ADDRESS
+      --i2c-reg/int
+      --i2c-ctrl/int:
+    write-register_ REGISTER-I2C-SLV4-ADDR_ (AK09916-I2C-ADDRESS | I2C-SLVx-ADDR-R_)  // read AK09916
+    writeRegister8(3, ICM20948-I2C-SLV4-REG, reg); // define AK09916 register to be read
+    writeRegister8(3, ICM20948-I2C-SLV4-CTRL, ICM20948-I2C-SLVX-EN);
+    unsigned long int startRead = millis(); // to avoid that the code hangs
+    while((readRegister8(3, ICM20948-I2C-SLV4-CTRL) & ICM20948-I2C-SLVX-EN) && (millis() - startRead < 100)){;}
+    return readRegister8(3, ICM20948-I2C-SLV4-DI);
 
-  uint8_t status = SPI_read(ICM_WHO_AM_I);
-  HAL_Delay(100);
+  static REGISTER-I2C-SLV4-ADDR_      ::= 0x13
+  static REGISTER-I2C-SLV4-REG_       ::= 0x14
+  static REGISTER-I2C-SLV4-CTRL_      ::= 0x15
+  static REGISTER-I2C-SLV4-DO_        ::= 0x16  // Data OUT when slave 4 is set to write.
+  static REGISTER-I2C-SLV4-DI_        ::= 0x17  // Data IN when slave 4.
 
-  return status;
-  */
 
 
   /**

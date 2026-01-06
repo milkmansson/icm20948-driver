@@ -17,19 +17,34 @@ main:
     --frequency=400_000
 
   bus-device-count := bus.scan.size
-  if not (bus.test icm20948.Driver.AK09916-I2C-ADDRESS):
-    print "Bus scan has $bus-device-count devices"
+  if not (bus.test icm20948.I2C-ADDRESS-ALT):
+    print "Bus scan does not contain ICM20948 [0x$(%02x icm20948.I2C-ADDRESS-ALT)]"
+    return
 
+  print "Bus contains ICM20948 [0x$(%02x icm20948.I2C-ADDRESS-ALT)]"
   device := bus.device icm20948.I2C-ADDRESS-ALT
   sensor := icm20948.Driver device
   sensor.on
+  print " configuring accelerometer.."
   sensor.configure-accel
+  print " configuring gyroscope.."
   sensor.configure-gyro
+  print " configuring magnetometer.."
+  sensor.configure-mag
 
-  sensor.
+  print "Starting reads:"
+  print " Acceleration: $sensor.read-accel"
+  print " Gyroscope:    $sensor.read-gyro"
+  print " Magnetometer: $sensor.read-mag"
 
-  while true:
-    print "Acceleration: $sensor.read-accel"
-    print "Gyroscope: $sensor.read-gyro"
-    sleep --ms=1000
+  sleep --ms=1000
+
+  print "$(sensor.dump-bytes 0x3b 16)"
+
+  //while true:
+  //  print "Acceleration: $sensor.read-accel"
+  //  print "Gyroscope: $sensor.read-gyro"
+  //  sleep --ms=1000
+
+
   sensor.off
