@@ -29,15 +29,19 @@ main:
   sensor.configure-accel
   print " configuring gyroscope.."
   sensor.configure-gyro
-  print " configuring magnetometer.."
-  sensor.configure-mag
+  print " configuring ICM20948 for magnetometer.."
+  sensor.configure-mag-registers
+  print "  mag whoami: 0x$(%02x sensor.read-mag-whoami)"
+
+  //print " configuring magnetometer"
+  sensor.configure-mag-data
 
   print "Starting reads:"
   print " Acceleration: $sensor.read-accel"
   print " Gyroscope:    $sensor.read-gyro"
-  print " Magnetometer: $sensor.read-mag"
+  //print " Magnetometer: $sensor.read-mag"
 
-  sleep --ms=1000
+  //sleep --ms=1000
 
   print "$(sensor.dump-bytes 0x3b 16)"
 

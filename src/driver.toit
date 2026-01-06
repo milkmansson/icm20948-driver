@@ -35,15 +35,15 @@ class Driver:
   static REGISTER-PWR-MGMT-1_     ::= 0x06
   static REGISTER-PWR-MGMT-2_     ::= 0x07
   static REGISTER-INT-PIN-CFG_    ::= 0x0F
-  static REGISTER-INT-ENABLE_      ::= 0x10
-  static REGISTER-INT-ENABLE-1_    ::= 0x11
-  static REGISTER-INT-ENABLE-2_    ::= 0x12
-  static REGISTER-INT-ENABLE-3_    ::= 0x13
-  static REGISTER-I2C-MST-STATUS_  ::= 0x17
-  static REGISTER-INT-STATUS_      ::= 0x19
+  static REGISTER-INT-ENABLE_     ::= 0x10
+  static REGISTER-INT-ENABLE-1_   ::= 0x11
+  static REGISTER-INT-ENABLE-2_   ::= 0x12
+  static REGISTER-INT-ENABLE-3_   ::= 0x13
+  static REGISTER-I2C-MST-STATUS_ ::= 0x17
+  static REGISTER-INT-STATUS_     ::= 0x19
   static REGISTER-INT-STATUS-1_   ::= 0x1A
-  static REGISTER-INT-STATUS-2_    ::= 0x1B
-  static REGISTER-INT-STATUS-3_    ::= 0x1C
+  static REGISTER-INT-STATUS-2_   ::= 0x1B
+  static REGISTER-INT-STATUS-3_   ::= 0x1C
   static REGISTER-ACCEL-XOUT-H_   ::= 0x2D
   static REGISTER-ACCEL-XOUT-L_   ::= 0x2E
   static REGISTER-ACCEL-YOUT-H_   ::= 0x2F
@@ -86,6 +86,16 @@ class Driver:
   static LP-CONFIG-I2C-MST-CYCLE_    ::= 0b01000000
   static LP-CONFIG-I2C-ACCEL-CYCLE_  ::= 0b00100000
   static LP-CONFIG-I2C-GYRO-CYCLE_   ::= 0b00010000
+
+  // Masks: REGISTER-I2C-MST-STATUS_
+  static I2C-MST-STATUS-I2C-SLV4-DONE_ ::= 0b01000000
+  static I2C-MST-STATUS-I2C-SLV4-NAK_  ::= 0b00010000
+  static I2C-MST-STATUS-PASS-THROUGH_  ::= 0b10000000
+  static I2C-MST-STATUS-I2C-LOST-ARB_  ::= 0b00100000
+  static I2C-MST-STATUS-I2C-SLV3-NAK_  ::= 0b00001000
+  static I2C-MST-STATUS-I2C-SLV2-NAK_  ::= 0b00000100
+  static I2C-MST-STATUS-I2C-SLV1-NAK_  ::= 0b00000010
+  static I2C-MST-STATUS-I2C-SLV0-NAK_  ::= 0b00000001
 
   // Bank 2
   static REGISTER-GYRO-SMPLRT-DIV_  ::= 0x0
@@ -168,6 +178,7 @@ class Driver:
   static I2C-MST-DELAY-SLV0-EN_   ::= 0b00000001
 
   // Register Map for AK09916
+  static REG-AK09916-MAN-ID_    ::= 0x00  // R 1 Manufacturer ID.
   static REG-AK09916-DEV-ID_    ::= 0x01  // R 1 Device ID.
   static REG-AK09916-STATUS-1_  ::= 0x10  // R 1 Data status.
   static REG-AK09916-X-AXIS_    ::= 0x11  // R 2 X Axis LSB (MSB 0x12).  Signed int.
@@ -178,7 +189,7 @@ class Driver:
   static REG-AK09916-CONTROL-2_ ::= 0x31  // R 1 Control Settings.
   static REG-AK09916-CONTROL-3_ ::= 0x32  // R 1 Control Settings.
 
-  static AK09916-DEV-ID           ::= 0b00001001 // Device ID should always be this.
+  static AK09916-DEV-ID_          ::= 0b00001001 // Device ID should always be this.
   static AK09916-STATUS-1-DOR_    ::= 0b00000010 // Data Overrun.
   static AK09916-STATUS-1-DRDY_   ::= 0b00000001 // New data is ready.
   static AK09916-STATUS-2-HOFL_   ::= 0b00001000 // Hardware Overflow.
@@ -201,15 +212,20 @@ class Driver:
   static WIDTH-16_ ::= 16
   static DEFAULT-REGISTER-WIDTH_ ::= WIDTH-8_
 
+  // I2C Slave Write Timeout
+  static COMMAND-TIMEOUT-MS_ ::= 1000
+
   accel-sensitivity_/float := 0.0
   gyro-sensitivity_/float := 0.0
 
+  bank_/int := -1
   reg_/Registers := ?
   logger_/log.Logger := ?
 
   constructor dev/Device --logger/log.Logger=log.default:
     reg_ = dev.registers
     logger_ = logger.with-name "icm20948"
+    set-bank_ 0
 
   on:
     tries := 5
@@ -272,6 +288,7 @@ class Driver:
       z / sensitivity
 
   read-accel -> math.Point3f:
+    set-bank_ 0
     while true:
       rdy := reg_.read-u8 REGISTER-INT-STATUS-1_
       if rdy == 1: break
@@ -280,6 +297,7 @@ class Driver:
     return read-point_ REGISTER-ACCEL-XOUT-H_ accel-sensitivity_
 
   read-gyro -> math.Point3f:
+    set-bank_ 0
     while true:
       rdy := reg_.read-u8 REGISTER-INT-STATUS-1_
       if rdy == 1: break
@@ -294,8 +312,14 @@ class Driver:
     set-bank_ 0
 
   set-bank_ bank/int:
+    assert: 0 <= bank <= 3
+    // To reduce writes, set bank only if needed.
+    if bank_ == bank:
+      logger_.debug "bank already set" --tags={"bank":bank}
+      return
     reg_.write-u8 REGISTER-REG-BANK-SEL_ bank << 4
-
+    logger_.debug "set bank" --tags={"bank":bank}
+    bank_ = bank
 
   /**
   Enables I2C bypass such that AK09916 appears and is reachable on external I2C bus.
@@ -388,9 +412,9 @@ class Driver:
     write-register_ REGISTER-I2C-MST-DELAY-CTRL_ 1 --mask=I2C-MST-DELAY-ES-SHADOW_
 
   /**
-  Enable AK09916 magnetometer registers.
+  Enable registers for reading AK09916 magnetometer.
   */
-  configure-mag -> none:
+  configure-mag-registers -> none:
     set-align-odr_ true
     set-i2c-bypass-mux_ false
     set-i2c-master_ false
@@ -401,26 +425,25 @@ class Driver:
     set-i2c-master-duty-odr_ 0x03          // ODR to 137Hz
     set-i2c-master-delay_ 0 true
 
+  /**
+  Configure AK09916 magnetometer to have data sent to ICM20948.
+  */
+  configure-mag-data -> none:
     // Reset Magnetometer Slave:
-    write-i2c-slave_ 0
-      --i2c-addr=AK09916-I2C-ADDRESS
-      --i2c-reg=REG-AK09916-CONTROL-3_
-      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x01) // 0x01 = I2C-SLVx-CTRL-LENG_ of 1
-      --i2c-data=AK09916-CONTROL-3-SRST_
-    sleep --ms=25
+    write-slave_ REG-AK09916-CONTROL-3_ AK09916-CONTROL-3-SRST_
 
-    // Put magnetometer into continuous mode 4:
-    write-i2c-slave_ 0
-      --i2c-addr=AK09916-I2C-ADDRESS
-      --i2c-reg=REG-AK09916-CONTROL-2_
-      --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x01) // 0x01 = I2C-SLVx-CTRL-LENG_ of 1
-      --i2c-data=AK09916-CONTROL-2-MODE4_
+    // Put Magnetometer Slave into Continuous Mode 4 (100Hz):
+    write-slave_ REG-AK09916-CONTROL-3_ AK09916-CONTROL-2-MODE4_
+    sleep --ms=100
+
 
     // Set which register gets read & number of bytes (ODR handles continuous reading):
+    /*
     write-i2c-slave_ 0
       --i2c-addr=AK09916-I2C-ADDRESS | 0b10000000  // R
       --i2c-reg=REG-AK09916-STATUS-1_
       --i2c-ctrl=(I2C-SLVx-CTRL-EN_ | 0x09) // 0x01 = I2C-SLVx-CTRL-LENG_ of 9
+    */
 
   read-mag -> math.Point3f:
     set-bank_ 0
@@ -430,6 +453,13 @@ class Driver:
       sleep --ms=1
 
     return read-point_ REGISTER-EXT-SLV-DATA-00_ 1.0
+
+  read-mag-whoami -> int:
+    raw := read-slave_ REG-AK09916-DEV-ID_
+    if raw == null:
+      logger_.error "read-mag-whoami null returned"
+      return 0
+    return raw
 
   dump-bytes addr/int length/int -> ByteArray:
     return (reg_.read-bytes addr 16)
@@ -475,14 +505,113 @@ class Driver:
     write-register_ i2c-slave-ctrl i2c-ctrl
 
 
-  read-slave_ -> int // only as slave 4
+  /**
+  Performs a one-shot read of the I2C slave at address $i2c-addr.
+
+  Function uses SLV4. (SLV4 used for ONE SHOT reads and writes to slave device.)
+  */
+  read-slave_ -> int?
       --i2c-addr/int=AK09916-I2C-ADDRESS
-      --i2c-reg/int
-      --i2c-ctrl/int:
-    write-register_ REGISTER-I2C-SLV4-ADDR_ (AK09916-I2C-ADDRESS | I2C-SLVx-ADDR-R_)  // read AK09916
-    writeRegister8(3, ICM20948-I2C-SLV4-REG, reg); // define AK09916 register to be read
-    writeRegister8(3, ICM20948-I2C-SLV4-CTRL, ICM20948-I2C-SLVX-EN);
-    unsigned long int startRead = millis(); // to avoid that the code hangs
+      i2c-reg/int
+      --i2c-ctrl/int=0
+      --width/int=DEFAULT-REGISTER-WIDTH_:
+    set-bank_ 3
+
+    // Set SLV4 to READ the $AK09916-I2C-ADDRESS address.
+    write-register_ REGISTER-I2C-SLV4-ADDR_ (AK09916-I2C-ADDRESS | I2C-SLVx-ADDR-R_)
+    // Give SLV4 the register to be read.
+    write-register_ REGISTER-I2C-SLV4-REG_ i2c-reg
+
+    // Wait for DONE or NACK (or timeout).  Also record display execution time.
+    start := Time.monotonic-us
+    finished := false
+    status-mask := 0x0
+    duration := Duration.ZERO
+    exception := catch:
+      with-timeout --ms=COMMAND-TIMEOUT-MS_:
+        duration = Duration.of:
+          // Write SLV4 control values (+EN bit) to execute.
+          write-register_ REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
+          // Wait for DONE or NAK.
+          set-bank_ 0
+          while not finished:
+            status-mask = read-register_ REGISTER-I2C-MST-STATUS_
+            if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
+            if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
+            sleep --ms=25
+
+    result/int? := null
+    if exception:
+      logger_.error "read-slave_ timed out" --tags={
+        "status-mask":"$(bits-grouped_ status-mask)",
+        "ms":duration.in-ms}
+      return null
+    if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0:
+      logger_.error "write-slave_ NACK" --tags={
+        "status-mask":"$(bits-grouped_ status-mask)",
+        "ms":duration.in-ms}
+      return null
+
+    set-bank_ 3
+    result = read-register_ REGISTER-I2C-SLV4-DI_ --width=width
+    //logger_.debug "read-slave_ succeeded" --tags={"result":"0x$(%02x result)", "status-mask":"$(bits-grouped_ status-mask)", "ms":duration.in-ms}
+    return result
+
+  /**
+    Performs a one-shot write to the I2C slave at address $i2c-addr.
+
+    Function uses SLV4. (SLV4 used for ONE SHOT reads and writes to slave device.)
+  */
+  write-slave_ -> none
+      --i2c-addr/int=AK09916-I2C-ADDRESS
+      i2c-reg/int
+      value/int
+      --i2c-ctrl/int=I2C-SLVx-CTRL-EN_
+      --width/int=DEFAULT-REGISTER-WIDTH_:
+    set-bank_ 3
+
+    // SLV4 in WRITE mode (Force 7 bit address without the READ flag).
+    write-register_ REGISTER-I2C-SLV4-ADDR_ (i2c-addr & 0x7F)
+    // Give SLV4 the register to be read.
+    write-register_ REGISTER-I2C-SLV4-REG_ i2c-reg
+    // Data out (the byte to write).
+    write-register_ REGISTER-I2C-SLV4-DO_ value --width=width
+
+    // Wait for DONE or NACK (or timeout), same as read-slave_.
+    finished := false
+    status-mask := 0x0
+    duration := Duration.ZERO
+    exception := catch:
+      with-timeout --ms=COMMAND-TIMEOUT-MS_:
+        duration = Duration.of:
+          // Execute the transaction by writing control value (+ EN bit).
+          write-register_ REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
+          // Wait for 'DONE' or 'NAK'
+          set-bank_ 0
+          while not finished:
+            status-mask = read-register_ REGISTER-I2C-MST-STATUS_
+            if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
+            if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
+            sleep --ms=25
+          set-bank_ 3
+
+    if exception:
+      logger_.error "write-slave_ timed out" --tags={
+        "status-mask":"$(bits-grouped_ status-mask)",
+        "ms":duration.in-ms}
+      throw "write-slave_ timed out"
+    if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0:
+      logger_.error "write-slave_ NACK" --tags={
+        "status-mask":"$(bits-grouped_ status-mask)",
+        "ms":duration.in-ms}
+      throw "write-slave_ NACK"
+    logger_.debug "write-slave_ succeeded" --tags={
+      "value":"0x$(%02x value)",
+      "status-mask":"$(bits-grouped_ status-mask)",
+      "ms":duration.in-ms}
+
+
+  /*
     while((readRegister8(3, ICM20948-I2C-SLV4-CTRL) & ICM20948-I2C-SLVX-EN) && (millis() - startRead < 100)){;}
     return readRegister8(3, ICM20948-I2C-SLV4-DI);
 
@@ -491,7 +620,7 @@ class Driver:
   static REGISTER-I2C-SLV4-CTRL_      ::= 0x15
   static REGISTER-I2C-SLV4-DO_        ::= 0x16  // Data OUT when slave 4 is set to write.
   static REGISTER-I2C-SLV4-DI_        ::= 0x17  // Data IN when slave 4.
-
+  */
 
 
   /**
@@ -588,3 +717,45 @@ class Driver:
       signed ? reg_.write-i16-le register new-value : reg_.write-u16-le register new-value
       return
     throw "write-register_: Unhandled Circumstance."
+
+  /**
+  Provides strings to display bitmasks nicely when testing.
+  */
+  bits-grouped_ x/int
+      --min-display-bits/int=0
+      --group-size/int=4
+      --sep/string="."
+      -> string:
+
+    assert: x >= 0
+    assert: group-size > 0
+
+    // raw binary
+    bin := "$(%b x)"
+
+    // choose target width: at least min-display-bits, then round up to a full group
+    groups := 0
+    leftover := 0
+    width := bin.size
+    if min-display-bits > width:
+      width = min-display-bits
+    if group-size > width:
+      width = group-size
+    leftover = width % group-size
+    if leftover > 0:
+      width = width + (group-size - leftover)
+
+    // left-pad to target width
+    bin = bin.pad --left width '0'
+
+    // group left->right
+    out := ""
+    i := 0
+    while i < bin.size:
+      if i > 0: out = "$(out)$(sep)"
+      j := i + group-size
+      if j > bin.size: j = bin.size
+      out = "$(out)$(bin[i..j])"
+      i = j
+
+    return out
