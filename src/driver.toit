@@ -251,6 +251,11 @@ class Driver:
     reg_.write-u8 REGISTER-PWR-MGMT-1_ 0b00000001
     reg_.write-u8 REGISTER-PWR-MGMT-2_ 0b00000000
 
+    // Configure to defaults for immediate function (avoid divide by zero)
+    configure-accel --scale=ACCEL-SCALE-2G
+    configure-gyro  --scale=GYRO-SCALE-250DPS
+    configure-mag  // No scale applies.
+
   configure-accel --scale/int=ACCEL-SCALE-2G:
     r := reg_.read-u8 REGISTER-LP-CONFIG_
     reg_.write-u8 REGISTER-LP-CONFIG_ r & ~0b100000
@@ -299,11 +304,14 @@ class Driver:
         (io.BIG-ENDIAN.int16 bytes 4) / sensitivity
 
   read-accel -> math.Point3f?:
+    if accel-sensitivity_ == 0.0:
+      throw "ACCEL NOT CONFIGURED"
+
     set-bank_ 0
     // Wait for ready, but with a timeout.
     exception := catch:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
-          while (reg_.read-u8 REGISTER-INT-STATUS-1_) != 1:
+          while ((reg_.read-u8 REGISTER-INT-STATUS-1_) & 0x01) == 0:
             sleep --ms=1
 
     if exception:
@@ -313,11 +321,14 @@ class Driver:
     return read-point_ REGISTER-ACCEL-XOUT-H_ accel-sensitivity_
 
   read-gyro -> math.Point3f?:
+    if gyro-sensitivity_ == 0.0:
+      throw "GYRO NOT CONFIGURED"
+
     set-bank_ 0
     // Wait for ready, but with a timeout.
     exception := catch:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
-          while (reg_.read-u8 REGISTER-INT-STATUS-1_) != 1:
+          while ((reg_.read-u8 REGISTER-INT-STATUS-1_) & 0x01) == 0:
             sleep --ms=1
 
     if exception:
