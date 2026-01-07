@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Toitware ApS. All rights reserved.
+// Copyright (C) 2026 Toitware Contributors. All rights reserved.
 // Use of this source code is governed by an MIT-style license that can be found
 // in the LICENSE file.
 
@@ -30,20 +30,21 @@ main:
   print " configuring gyroscope.."
   sensor.configure-gyro
   print " configuring ICM20948 for magnetometer.."
-  sensor.configure-mag-registers
+  sensor.configure-mag
+
   print "  mag whoami: 0x$(%02x sensor.read-mag-whoami)"
 
-  //print " configuring magnetometer"
-  sensor.configure-mag-data
 
   print "Starting reads:"
   print " Acceleration: $sensor.read-accel"
   print " Gyroscope:    $sensor.read-gyro"
-  //print " Magnetometer: $sensor.read-mag"
+  20.repeat:
+    print "$it: Magnetometer: $sensor.read-mag"
+    sleep --ms=15
 
   //sleep --ms=1000
 
-  print "$(sensor.dump-bytes 0x3b 16)"
+  print "$(sensor.dump-bytes 10 --reg=0x3b --bank=0)"
 
   //while true:
   //  print "Acceleration: $sensor.read-accel"
