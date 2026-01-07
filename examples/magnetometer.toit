@@ -31,23 +31,18 @@ main:
   sensor.configure-accel
   print " configuring gyroscope.."
   sensor.configure-gyro
-  print " configuring ICM20948 for magnetometer.."
+  print " configuring magnetometer.."
   sensor.configure-mag
-
   print
-  print "Starting reads:"
-  print " Acceleration: $sensor.read-accel"
-  print " Gyroscope:    $sensor.read-gyro"
-  print " Magnetometer: $sensor.read-mag"
+  print "Starting 10 reads:"
+  10.repeat:
+    sleep --ms=1000
+    print "Read $(it + 1):"
+    print " Acceleration: $sensor.read-accel"
+    print " Gyroscope:    $sensor.read-gyro"
+    print " Magnetometer: $sensor.read-mag"
 
-  //sleep --ms=1000
-
-  print "$(sensor.dump-bytes 10 --reg=0x3b --bank=0)"
-
-  //while true:
-  //  print "Acceleration: $sensor.read-accel"
-  //  print "Gyroscope: $sensor.read-gyro"
-  //  sleep --ms=1000
-
+  // For troubleshooting the 10 bytes taken from the magnetometer
+  //print "$(sensor.dump-bytes 10 --reg=0x3b --bank=0)"
 
   sensor.off

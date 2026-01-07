@@ -62,12 +62,19 @@ class Driver:
   static REGISTER-EXT-SLV-DATA-00_ ::= 0x3b
   static REGISTER-EXT-SLV-DATA-01_ ::= 0x3c
   static REGISTER-EXT-SLV-DATA-02_ ::= 0x3d
+  static REGISTER-EXT-SLV-DATA-03_ ::= 0x3e
+  static REGISTER-EXT-SLV-DATA-04_ ::= 0x3f
+  static REGISTER-EXT-SLV-DATA-05_ ::= 0x40
+  static REGISTER-EXT-SLV-DATA-06_ ::= 0x41
+  static REGISTER-EXT-SLV-DATA-07_ ::= 0x42
+  static REGISTER-EXT-SLV-DATA-08_ ::= 0x43
+  static REGISTER-EXT-SLV-DATA-09_ ::= 0x44
   //...
   static REGISTER-EXT-SLV-DATA-23_ ::= 0x52
 
   static REGISTER-FIFO-EN-1_        ::= 0x66
   static REGISTER-FIFO-EN-2_        ::= 0x67
-  static REGISTER-FIFO-RST_        ::= 0x68
+  static REGISTER-FIFO-RST_         ::= 0x68
   static REGISTER-FIFO-MODE_        ::= 0x69
   static REGISTER-FIFO-COUNT_       ::= 0x70
   static REGISTER-FIFO-R-W_         ::= 0x72
@@ -231,7 +238,6 @@ class Driver:
 
   constructor dev/Device --logger/log.Logger=log.default:
     reg_ = dev.registers
-    print logger.stringify
     logger_ = logger.with-name "icm20948"
     set-bank_ 0
 
@@ -254,7 +260,7 @@ class Driver:
     // Configure to defaults for immediate function (avoid divide by zero)
     configure-accel --scale=ACCEL-SCALE-2G
     configure-gyro  --scale=GYRO-SCALE-250DPS
-    configure-mag  // No scale applies.
+    configure-mag   // No user selectable scale applies.
 
   configure-accel --scale/int=ACCEL-SCALE-2G:
     r := reg_.read-u8 REGISTER-LP-CONFIG_
@@ -340,9 +346,12 @@ class Driver:
   reset_:
     set-bank_ 0
     reg_.write-u8 REGISTER-PWR-MGMT-1_ 0b10000001
-    sleep --ms=5
+    bank_ = -1
+    sleep --ms=100
     set-bank_ 0
-
+    if (reg_.read-u8 REGISTER-WHO-AM-I_) != WHO-AM-I_:
+      logger_.error "bus did not recover from reset"
+      throw "Bus did not recover from reset."
 
   /**
   Sets the current bank for register reads and writes.
@@ -510,11 +519,19 @@ class Driver:
     // Wait for ready, but with a timeout.
     exception := catch:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
-          while (read-register_ REGISTER-EXT-SLV-DATA-01_ --width=8) & AK09916-STATUS-1-DRDY_ == 0:
-            sleep --ms=10   // Was 1ms.
+        while (((read-register_ REGISTER-EXT-SLV-DATA-01_ --width=8) & AK09916-STATUS-1-DRDY_) == 0):
+          sleep --ms=10   // Was 1ms.
+
     if exception:
       logger_.error "read-mag timed out" --tags={"timeout-ms":COMMAND-TIMEOUT-MS_}
       return null
+
+    ak09916-dor := read-register_ REGISTER-EXT-SLV-DATA-01_ --mask=AK09916-STATUS-1-DOR_
+    if ak09916-dor == 1:
+      logger_.error "mag reports data overflow" --tags={"status-1":ak09916-dor}
+    ak09916-hofl := read-register_ REGISTER-EXT-SLV-DATA-09_ --mask=AK09916-STATUS-2-HOFL_
+    if ak09916-hofl == 1:
+      logger_.error "mag reports hardware overflow" --tags={"status-2":ak09916-hofl}
 
     return read-point_ REGISTER-EXT-SLV-DATA-02_ (1.0 / 0.15) --le
 
@@ -576,8 +593,7 @@ class Driver:
     // Write control bitmask witn EN to execute the transaction.
     ctrl := ((i2c-ctrl | I2C-SLVx-CTRL-EN_) | size)
     write-register_ i2c-slave-ctrl ctrl
-
-    logger_.debug "set slave" --tags={"slave":slave,"slave-reg":i2c-addr,"ctrl":"$(bits-grouped_ ctrl)"}
+    //logger_.debug "set slave" --tags={"slave":slave,"slave-addr":i2c-addr,"slave-reg":i2c-reg,"ctrl":"$(bits-grouped_ ctrl)"}
 
   /**
   Performs a one-shot read of the I2C slave at address $i2c-addr.
@@ -612,7 +628,7 @@ class Driver:
             status-mask = read-register_ REGISTER-I2C-MST-STATUS_
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
-            sleep --ms=25
+            sleep --ms=10
 
     // Return null on failure.
     result/int? := null
@@ -622,7 +638,7 @@ class Driver:
         "ms":duration.in-ms}
       return result
     if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0:
-      logger_.error "write-slave_ NACK" --tags={
+      logger_.error "write-slave_ NAK" --tags={
         "status-mask":"$(bits-grouped_ status-mask)",
         "ms":duration.in-ms}
       return result
@@ -674,18 +690,18 @@ class Driver:
     if exception:
       logger_.error "write-slave_ timed out" --tags={
         "status-mask":"$(bits-grouped_ status-mask)",
-        "ms":duration.in-ms}
+        "ms":COMMAND-TIMEOUT-MS_}
       throw "write-slave_ timed out"
     if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0:
       logger_.error "write-slave_ NAK" --tags={
         "status-mask":"$(bits-grouped_ status-mask)",
         "ms":duration.in-ms}
       throw "write-slave_ NAK"
-    logger_.debug "write-slave_ succeeded" --tags={
-      "reg":"0x$(%02x i2c-reg)",
-      "value":"0x$(%02x value)",
-      "status-mask":"$(bits-grouped_ status-mask)",
-      "ms":duration.in-ms}
+    //logger_.debug "write-slave_ succeeded" --tags={
+    //  "reg":"0x$(%02x i2c-reg)",
+    //  "value":"0x$(%02x value)",
+    //  "status-mask":"$(bits-grouped_ status-mask)",
+    //  "ms":duration.in-ms}
 
 
   /**
