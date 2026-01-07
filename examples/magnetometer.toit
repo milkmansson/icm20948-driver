@@ -11,6 +11,8 @@ import i2c
 import icm20948
 
 main:
+  print
+  print
   bus := i2c.Bus
     --sda=gpio.Pin 8
     --scl=gpio.Pin 9
@@ -32,15 +34,11 @@ main:
   print " configuring ICM20948 for magnetometer.."
   sensor.configure-mag
 
-  print "  mag whoami: 0x$(%02x sensor.read-mag-whoami)"
-
-
+  print
   print "Starting reads:"
   print " Acceleration: $sensor.read-accel"
   print " Gyroscope:    $sensor.read-gyro"
-  20.repeat:
-    print "$it: Magnetometer: $sensor.read-mag"
-    sleep --ms=15
+  print " Magnetometer: $sensor.read-mag"
 
   //sleep --ms=1000
 

@@ -185,6 +185,8 @@ class Driver:
   // Register Map for AK09916
   static REG-AK09916-MAN-ID_    ::= 0x00  // R 1 Manufacturer ID.
   static REG-AK09916-DEV-ID_    ::= 0x01  // R 1 Device ID.
+  static REG-AK09916-RSV-1_     ::= 0x02  // R 1 Reserved.
+  static REG-AK09916-RSV-2_     ::= 0x03  // R 1 Reserved.
   static REG-AK09916-STATUS-1_  ::= 0x10  // R 1 Data status.
   static REG-AK09916-X-AXIS_    ::= 0x11  // R 2 X Axis LSB (MSB 0x12).  Signed int.
   static REG-AK09916-Y-AXIS_    ::= 0x13  // R 2 Y Axis LSB (MSB 0x14).  Signed int.
@@ -229,6 +231,7 @@ class Driver:
 
   constructor dev/Device --logger/log.Logger=log.default:
     reg_ = dev.registers
+    print logger.stringify
     logger_ = logger.with-name "icm20948"
     set-bank_ 0
 
@@ -350,11 +353,12 @@ class Driver:
 
   Requires the ICM20948 device to be turned $on.
 
-  This is largely for testing/debugging the outputs of the AK09916.  It is
-    not used for any other reasons.  As the MCU must manage timing there is no
-    synchronization with accel/gyro. The bus will conflict if it is
-    misconfigured.  The mode prevents DMP fusion. This mode also prevents access
-    to AK09916 data over SPI.
+  This is largely for direct access to the AK09916, for testing/debugging
+    purposes.  It is not used for any other reasons.  It could be suggested that
+    Software oriented fusion could still be done, however, as the MCU must
+    manage timing there is no synchronization with accel/gyro.  The bus will
+    conflict if it is misconfigured.  The mode prevents DMP fusion.  This mode
+    also prevents access to AK09916 data over SPI.
   */
   enable-i2c-bypass -> none:
     set-i2c-master_ false
@@ -421,7 +425,13 @@ class Driver:
     set-bank_ 3
     write-register_ REGISTER-I2C-MST-ODR-CONFIG_ odr
 
-  set-i2c-master-delay_ slave/int enable/bool -> none:
+  /**
+  Enables Master Delay for slave $slave.
+
+  When enabled, slave 0 will only be accessed 1/(1+I2C_SLC4_DLY) samples as
+    determined by I2C_MST_ODR_CONFIG.
+  */
+  set-i2c-master-delay_ --slave/int enable/bool -> none:
     assert: 0 <= slave <= 4
     set-bank_ 3
     mask := 1 << slave
@@ -429,6 +439,9 @@ class Driver:
     if enable: value = 1
     write-register_ REGISTER-I2C-MST-DELAY-CTRL_ value --mask=mask
 
+  /**
+  Delays shadowing of external sensor data until all data is received.
+  */
   shadow-sensor-only-when-complete_ enable/bool -> none:
     set-bank_ 3
     value := 0
@@ -436,7 +449,11 @@ class Driver:
     write-register_ REGISTER-I2C-MST-DELAY-CTRL_ value --mask=I2C-MST-DELAY-ES-SHADOW_
 
   /**
-  Prepares ICM20948 for communication with AK09916 magnetometer on slave bus.
+  Enables magnetometer on slave I2C bus.
+
+  Configures the ICM20948 for communication with AK09916. This includes
+    resetting the AK09916, configuring it for 100Hz sampling, and then
+    configuring the ICM20948 to
   */
   configure-mag -> none:
     // Set as master again, in case it was bypassed in the previous run.
@@ -452,26 +469,30 @@ class Driver:
     // Set bus speed to 400Khz
     set-i2c-bus-speed_ 0x07
     set-i2c-master-duty-cycle-mode_ true
-    // Set ODR to 137Hz
+    // Set ODR to 137Hz.
     set-i2c-master-duty-odr_ 0x03
-
-    set-i2c-master-delay_ 0 true
-
-    // Reset Magnetometer Slave:
+    // Enable master delay for this slave.
+    set-i2c-master-delay_ --slave=0 true
+    // Reset Magnetometer Slave.
     write-slave_ REG-AK09916-CONTROL-3_ AK09916-CONTROL-3-SRST_
-    // Put Magnetometer Slave into Continuous Mode 4 (100Hz):
+    // Put Magnetometer Slave into Continuous Mode 4 (100Hz).
     write-slave_ REG-AK09916-CONTROL-2_ AK09916-CONTROL-2-MODE4_
-    sleep --ms=10
 
-    // Common method is to set SLV0: to get 9 bytes starting at
-    //  REG-AK09916-STATUS-1_ via ODR.  Sparkfun research advises that reading
-    //  10 bytes starting at 0x03 (undocumented/reserved) allows getting the
-    //  bytes in pairs as the DMP engine expects them to be.  The remainder of
-    //  this driver is tuned for this - first byte (in REGISTER-EXT-SLV-DATA-00_)
-    //  will be original reg 0x03, second byte will be original reg 0x10,
-    //  going sequentially from there.  This way the DMP engine will read the
-    //  same way we do.
-    set-slave 0 0x03 --size=10
+    /*
+    Common method is to set SLV0: to get 9 bytes starting at
+      REG-AK09916-STATUS-1_ via ODR.  Sparkfun engineering advises that reading
+      10 bytes starting at REG-AK09916-RSV-2_ (undocumented/reserved) allows
+      getting the bytes in pairs as the DMP engine expects them to be.
+
+    The remainder of  this driver is tuned for this - first byte (in
+      REGISTER-EXT-SLV-DATA-00_) will be original reg REG-AK09916-RSV-2_ (0x03)
+      (unused), second byte will be original reg REG-AK09916-STATUS-1_ and
+      read sequentially the next 10 bytes from from there (up to and including
+      REG-AK09916-STATUS-2_, which triggers the next data refresh on the
+      AK09916. This way the driver will read and use the device prepared in the
+      same way the DMP engine needs.
+    */
+    set-slave 0 REG-AK09916-RSV-2_ --size=10
 
   read-mag -> math.Point3f?:
     set-bank_ 0
