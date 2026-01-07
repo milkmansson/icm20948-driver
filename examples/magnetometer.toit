@@ -35,13 +35,14 @@ main:
   sensor.configure-mag
   print
   print "Starting 10 reads:"
+  print   " Temperature:  $(%0.2f sensor.read-die-temp) c"
   10.repeat:
     sleep --ms=1000
-    print "Read $(it + 1):"
+    print " -------------------------------------------"
     print " Acceleration: $sensor.read-accel"
     print " Gyroscope:    $sensor.read-gyro"
     print " Magnetometer: $sensor.read-mag"
-
+  print " -------------------------------------------"
   // For troubleshooting the 10 bytes taken from the magnetometer
   //print "$(sensor.dump-bytes 10 --reg=0x3b --bank=0)"
 

@@ -58,6 +58,8 @@ class Driver:
   static REGISTER-GYRO-YOUT-L_    ::= 0x36
   static REGISTER-GYRO-ZOUT-H_    ::= 0x37
   static REGISTER-GYRO-ZOUT-L_    ::= 0x38
+  static REGISTER-TEMP-OUT-H_     ::= 0x39
+  static REGISTER-TEMP-OUT-L_     ::= 0x3a
 
   static REGISTER-EXT-SLV-DATA-00_ ::= 0x3b
   static REGISTER-EXT-SLV-DATA-01_ ::= 0x3c
@@ -389,6 +391,12 @@ class Driver:
     set-i2c-bypass-mux_ false
     set-i2c-master_ true
 
+  /** Read on-die Thermomenter. */
+  read-die-temp -> float:
+    set-bank_ 0
+    raw := reg_.read-bytes REGISTER-TEMP-OUT-H_ 2
+    return ((io.BIG-ENDIAN.int16 raw 0).to-float / 333.87) + 21.0
+
   /**
   Set ODR Alignment.
 
@@ -685,7 +693,6 @@ class Driver:
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
             sleep --ms=25
-          set-bank_ 3
 
     if exception:
       logger_.error "write-slave_ timed out" --tags={
