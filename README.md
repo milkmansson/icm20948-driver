@@ -30,4 +30,5 @@ If the use case requires direct I2C access to the AX09916, the device has the
 capability of exposing it on the I2C bus alongside the ICM20948.  To do this,
 use `enable-i2c-bypass`.  (Reverse it by using `disable-i2c-bypass`.)
 Synchronisation of measurements won't be possible, and onboard features like DMP
-etc will not be available whilst in this mode.  (An example use of this )
+etc will not be available whilst in this mode.  (An example use of this is given
+in this [example](./examples/mag-i2c-bypass.toit).
