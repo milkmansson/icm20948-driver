@@ -922,7 +922,7 @@ class Driver:
 
     return out
 
-  fifo-start --mag/bool=false --accel/bool=false --gyro/bool=false --temp=false -> none:
+  fifo-start --mag/bool=false --accel/bool=false --gyro/bool=false --temp/bool=false --sample-rate-hz/int=1 -> none:
     if not mag and not accel and not gyro and not temp:
       logger_.error "fifo-start without any selected sensor, doing nothing..."
       return
@@ -933,13 +933,14 @@ class Driver:
     set-sleep false
     fifo-reset
     set-fifo-mode false
-    set-sample-rate-hz 1
-    configure-mag
+    set-sample-rate-hz sample-rate-hz
+    if mag: configure-mag
     fifo-set-mag-data_ mag
+    if accel: configure-accel
     fifo-set-accel-data_ accel
+    if gyro: configure-gyro
     fifo-set-gyro-data_ gyro
     fifo-set-temp-data_ temp
-    fifo-update-frame-size_
     fifo-reset
     fifo-enable_ true
 
@@ -952,6 +953,7 @@ class Driver:
     adapter_ = null
 
     // Zero enabled FIFO options.
+    fifo-frame-size_ = 0
     write-register_ 0 REGISTER-FIFO-EN-1_ 0x0
     write-register_ 0 REGISTER-FIFO-EN-2_ 0x0
 
