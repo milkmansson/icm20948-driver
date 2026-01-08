@@ -1,5 +1,5 @@
-# icm20948
-Driver for ICM-20948 9-axis devices.  This device comprises of a native
+# A toit driver for the Ivensense/TDK ICM20948 9-axis MEMS motion sensor.
+The ICM-20948 is a 9-axis devices, comprising of a native
 gyroscope and acceleromoeter, with a built in instance of an AK09916
 magnetometer.  It has many features.
 
@@ -8,27 +8,51 @@ For complete examples, see [examples folder](./examples/)
 
 ## Features
 
-### Standard Functions: 6-axis:
+### Standard Functions: 9-axis
 The basic accelerometer and gyroscope functions are exposed using `.read-accel`
 and `.read-gyro`.  These will return Point3f's of the x/y/z vector.  Before
 running these functions, they must be configured using `configure-gyro` and
 `configure-accel`.
-The hardware implementation of the compass/magnetometer component is quite
-different, however these are implemented similarly.  To use the magenetometer,
-use `.read-mag`.  This requires setup first, using `.configure-mag`.
+
+The ICM20948 hardware implementation of the compass/magnetometer component is
+quite different, however this is handled in this driver with similar functions.
+To use the magenetometer, use `.read-mag`.  This requires setup first, using
+`.configure-mag`.
 
 ### FIFO:
 Basic FIFO handling is implemented in this driver.  (The driver assumes that the
 magnetometer is the onboard AK09916, and no other devices are connected to the
-AUX I2C bus.)  The usage patterns are in the examples, however essentially:
-```
+AUX I2C bus.)  The usage patterns are in the examples. Essentially, after
+starting and configuring the driver normally, start the FIFO, and assign a
+lambda to be run each time a frame is returned:
+```Toit
+// Start the fifo specifying which functions should be in the result frame.
+sensor.fifo-start --accel=true --gyro=true --mag=true --temp=true
 
+// The sensor starts the specified lambda for each frame received from the FIFO.
+sensor.run (::
+  out := []
+  out.add ("accel: $(sensor.read-accel it[0..6])".pad --left 40 ' ')
+  out.add ("gyro: $(sensor.read-gyro it[6..12])".pad --left 40 ' ')
+  out.add ("mag: $(sensor.read-mag it[14..20])".pad --left 40 ' ')
+  out.add ("temp: $(%0.3f sensor.read-temp it[20..22])".pad --left 14 ' ')
+  print out)
+
+// This is run as a separate task, and therefore we wait 5 seconds to see some
+// results come to the screen.
+sleep --ms=5_000
+
+// This stops the background sensor.run task.
+sensor.run-stop
 ```
 
 ### Auxiliary Bus:
 If the use case requires direct I2C access to the AX09916, the device has the
 capability of exposing it on the I2C bus alongside the ICM20948.  To do this,
-use `enable-i2c-bypass`.  (Reverse it by using `disable-i2c-bypass`.)
-Synchronisation of measurements won't be possible, and onboard features like DMP
-etc will not be available whilst in this mode.  (An example use of this is given
-in this [example](./examples/mag-i2c-bypass.toit).
+use `enable-i2c-bypass`.  (Reverse it by using `disable-i2c-bypass`.)  A
+separate driver will be required to access it, such as the
+[AK0991x Driver](https://github.com/milkmansson/toit-ak0991x).
+
+Note that synchronisation of measurements isn't possible, and onboard features
+using the magnetometer, (like DMP etc) will not be available whilst in this
+mode.  (An example use of this is given in this [example](./examples/mag-i2c-bypass.toit).
