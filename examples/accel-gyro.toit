@@ -12,8 +12,8 @@ import icm20948
 
 main:
   bus := i2c.Bus
-    --sda=gpio.Pin 21
-    --scl=gpio.Pin 22
+    --sda=gpio.Pin 19
+    --scl=gpio.Pin 20
 
   device := bus.device icm20948.I2C-ADDRESS-ALT
 
@@ -24,6 +24,6 @@ main:
   sensor.configure-gyro
   while true:
     print "Acceleration: $sensor.read-accel"
-    print "Gyroscope: $sensor.read-gyro"
+    print "Gyroscope:    $sensor.read-gyro"
     sleep --ms=1000
   sensor.off

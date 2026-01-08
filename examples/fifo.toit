@@ -27,24 +27,24 @@ main:
   device := bus.device icm20948.I2C-ADDRESS-ALT
   sensor := icm20948.Driver device
   sensor.on
-
   print " configuring accelerometer.."
   sensor.configure-accel
   print " configuring gyroscope.."
   sensor.configure-gyro
   print " configuring magnetometer.."
   sensor.configure-mag
-  print
-  print "Starting 10 reads:"
-  print   " Temperature:  $(%0.2f sensor.read-die-temp) c"
-  10.repeat:
-    sleep --ms=1000
-    print " -------------------------------------------"
-    print " Acceleration: $sensor.read-accel"
-    print " Gyroscope:    $sensor.read-gyro"
-    print " Magnetometer: $sensor.read-mag"
-  print " -------------------------------------------"
-  // For troubleshooting the 10 bytes taken from the magnetometer
-  //print "$(sensor.dump-bytes 10 --reg=0x3b --bank=0)"
+  print " starting fifo.."
+  sensor.fifo-start --accel=true --gyro=true --mag=true --temp=true
+  print " starting runner.."
+  sensor.run (:: print " - $it")
 
+  print " running 10 seconds.."
+  sleep --ms=10_000
+
+  print " stopping runner.."
+  sensor.run-stop
+  sleep --ms=1_000
+  print " stopping  fifo.."
+  sensor.fifo-stop
+  print " stopping sensor.."
   sensor.off

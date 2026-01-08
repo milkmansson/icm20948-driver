@@ -3,10 +3,10 @@
 // in the LICENSE file.
 
 import io
-import serial.device show Device
-import serial.registers show Registers
+import serial
 import math
 import log
+import monitor
 
 I2C-ADDRESS     ::= 0b1101000
 I2C-ADDRESS-ALT ::= 0b1101001
@@ -83,6 +83,19 @@ class Driver:
   static REGISTER-DATA-RDY-STATUS_  ::= 0x74
   static REGISTER-FIFO-CFG_         ::= 0x76
 
+  // Masks: REGISTER-PWR-MGMT-1_
+  static PWR-MGMT-1-DEVICE-RESET_ ::= 0b10000000
+  static PWR-MGMT-1-SLEEP_        ::= 0b01000000
+  static PWR-MGMT-1-LOW-POWER_    ::= 0b00100000
+  static PWR-MGMT-1-TEMP-DIS_     ::= 0b00010000
+  static PWR-MGMT-1-CLKSEL_       ::= 0b00000111
+
+  // Masks: REGISTER-FIFO-EN-2_
+  static FIFO-EN-2-ACCEL-EN_  ::= 0b00010000
+  static FIFO-EN-2-GYRO-Z-EN_ ::= 0b00001000
+  static FIFO-EN-2-GYRO-Y-EN_ ::= 0b00000100
+  static FIFO-EN-2-GYRO-X-EN_ ::= 0b00000010
+  static FIFO-EN-2-TEMP-EN_   ::= 0b00000001
 
   // Masks: $REGISTER-USER-CTRL_
   static USER-CTRL-DMP-EN_      ::= 0b10000000
@@ -109,12 +122,14 @@ class Driver:
   static I2C-MST-STATUS-I2C-SLV0-NAK_  ::= 0b00000001
 
   // Bank 2
-  static REGISTER-GYRO-SMPLRT-DIV_  ::= 0x0
-  static REGISTER-GYRO-CONFIG-1_    ::= 0x1
-  static REGISTER-GYRO-CONFIG-2_    ::= 0x2
-  static REGISTER-ODR-ALIGN-EN_     ::= 0x9
-  static REGISTER-ACCEL-CONFIG_     ::= 0x14
-  static REGISTER-ACCEL-CONFIG-2_   ::= 0x15
+  static REGISTER-GYRO-SMPLRT-DIV_    ::= 0x0
+  static REGISTER-GYRO-CONFIG-1_      ::= 0x1
+  static REGISTER-GYRO-CONFIG-2_      ::= 0x2
+  static REGISTER-ODR-ALIGN-EN_       ::= 0x9
+  static REGISTER-ACCEL-SMPLRT-DIV-1_ ::= 0x10
+  static REGISTER-ACCEL-SMPLRT-DIV-2_ ::= 0x11
+  static REGISTER-ACCEL-CONFIG_       ::= 0x14
+  static REGISTER-ACCEL-CONFIG-2_     ::= 0x15
 
   // Bank 3 - I2C Master Engine.
   static REGISTER-I2C-MST-ODR-CONFIG_ ::= 0x00
@@ -223,6 +238,9 @@ class Driver:
 
   static AK09916-I2C-ADDRESS ::= 0x0C  // Magnetometer I2C address when configured for bus bridging.
 
+  // Sampling Rate Constants.
+  static BASE-RATE-HZ_/int ::= 1125
+
   // $write-register_ statics for bit width.  All 16 bit read/writes are LE.
   static WIDTH-8_ ::= 8
   static WIDTH-16_ ::= 16
@@ -235,71 +253,75 @@ class Driver:
   gyro-sensitivity_/float := 0.0
 
   bank_/int := -1
-  reg_/Registers := ?
+  dev_/serial.Device := ?
+  reg_/serial.Registers := ?
   logger_/log.Logger := ?
+  runner_/Task? := null
+  fifo-frame-size_/int := 0
+  bank-mutex_ := monitor.Mutex
 
-  constructor dev/Device --logger/log.Logger=log.default:
-    reg_ = dev.registers
+
+  adapter_/FifoAdapter_? := null
+
+  constructor device/serial.Device --logger/log.Logger=log.default:
+    dev_ = device
+    reg_ = device.registers
     logger_ = logger.with-name "icm20948"
-    set-bank_ 0
+
+    // Set current bank in sync with local var
+    set-bank-p_ 0
 
   on:
     tries := 5
-    set-bank_ 0
-    while (reg_.read-u8 REGISTER-WHO-AM-I_) != WHO-AM-I_:
+    set-bank-p_ 0
+    while (read-register_ 0 REGISTER-WHO-AM-I_) != WHO-AM-I_:
       tries--
       if tries == 0: throw "INVALID_CHIP"
       sleep --ms=1
 
     reset_
+    logger_.debug "device switched on"
 
     // Enable ACCEL and GYRO.
-    set-bank_ 0
     // print ((reg_.read_u8 REGISTER_PWR_MGMT_1_).stringify 16)
-    reg_.write-u8 REGISTER-PWR-MGMT-1_ 0b00000001
-    reg_.write-u8 REGISTER-PWR-MGMT-2_ 0b00000000
+    write-register_ 0 REGISTER-PWR-MGMT-1_ 0b00000001
+    write-register_ 0 REGISTER-PWR-MGMT-2_ 0b00000000
 
     // Configure to defaults for immediate function (avoid divide by zero)
-    configure-accel --scale=ACCEL-SCALE-2G
-    configure-gyro  --scale=GYRO-SCALE-250DPS
-    configure-mag   // No user selectable scale applies.
+    //configure-accel --scale=ACCEL-SCALE-2G
+    //configure-gyro  --scale=GYRO-SCALE-250DPS
+    //configure-mag   // No user selectable scale applies.
 
   configure-accel --scale/int=ACCEL-SCALE-2G:
-    r := reg_.read-u8 REGISTER-LP-CONFIG_
-    reg_.write-u8 REGISTER-LP-CONFIG_ r & ~0b100000
+    set-accel-duty-cycle-mode_ true
 
     // Configure accel.
     cfg := 0b00111_00_1
     cfg |= scale << 1
-    set-bank_ 2
-    reg_.write-u8 REGISTER-ACCEL-CONFIG_ cfg
-    set-bank_ 0
+    write-register_ 2 REGISTER-ACCEL-CONFIG_ cfg
 
     accel-sensitivity_ = ACCEL-SENSITIVITY_[scale]
-
     sleep --ms=10
+    logger_.debug "accelerometer configured"
 
   configure-gyro --scale/int=GYRO-SCALE-250DPS:
-    r := reg_.read-u8 REGISTER-LP-CONFIG_
-    reg_.write-u8 REGISTER-LP-CONFIG_ r & ~0b10000
+    set-gyro-duty-cycle-mode_ true
 
-    set-bank_ 2
-
-    //reg_.write_u8 REGISTER_GYRO_SMPLRT_DIV_ 0
-
-    reg_.write-u8 REGISTER-GYRO-CONFIG-1_ 0b111_00_1 | scale << 1
-    //reg_.write_u8 REGISTER_GYRO_CONFIG_2_ 0b1111
-
-    set-bank_ 0
+    //write-register_ 2 REGISTER_GYRO_SMPLRT_DIV_ 0
+    write-register_ 2 REGISTER-GYRO-CONFIG-1_ (0b111_00_1 | scale << 1)
+    //write-register_ 2 REGISTER_GYRO_CONFIG_2_ 0b1111
 
     gyro-sensitivity_ = GYRO-SENSITIVITY_[scale]
-
     sleep --ms=10
+    logger_.debug "gyroscope configured"
 
   off:
 
   read-point_ reg/int sensitivity/float --le/bool=false -> math.Point3f:
-    bytes := reg_.read-bytes reg 6
+    bytes := #[]
+    bank-mutex_.do:
+      set-bank-p_ 0
+      bytes = reg_.read-bytes reg 6
     if le:
       return math.Point3f
         (io.LITTLE-ENDIAN.int16 bytes 0) / sensitivity
@@ -315,11 +337,10 @@ class Driver:
     if accel-sensitivity_ == 0.0:
       throw "ACCEL NOT CONFIGURED"
 
-    set-bank_ 0
     // Wait for ready, but with a timeout.
     exception := catch:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
-          while ((reg_.read-u8 REGISTER-INT-STATUS-1_) & 0x01) == 0:
+          while ((read-register_ 0 REGISTER-INT-STATUS-1_) & 0x01) == 0:
             sleep --ms=1
 
     if exception:
@@ -332,11 +353,10 @@ class Driver:
     if gyro-sensitivity_ == 0.0:
       throw "GYRO NOT CONFIGURED"
 
-    set-bank_ 0
     // Wait for ready, but with a timeout.
     exception := catch:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
-          while ((reg_.read-u8 REGISTER-INT-STATUS-1_) & 0x01) == 0:
+          while ((read-register_ 0 REGISTER-INT-STATUS-1_) & 0x01) == 0:
             sleep --ms=1
 
     if exception:
@@ -346,14 +366,35 @@ class Driver:
     return read-point_ REGISTER-GYRO-XOUT-H_ gyro-sensitivity_
 
   reset_:
-    set-bank_ 0
-    reg_.write-u8 REGISTER-PWR-MGMT-1_ 0b10000001
-    bank_ = -1
-    sleep --ms=100
-    set-bank_ 0
-    if (reg_.read-u8 REGISTER-WHO-AM-I_) != WHO-AM-I_:
-      logger_.error "bus did not recover from reset"
-      throw "Bus did not recover from reset."
+    bank-mutex_.do:
+      set-bank-p_ 0
+      reg_.write-u8 REGISTER-PWR-MGMT-1_ PWR-MGMT-1-DEVICE-RESET_
+      bank_ = -1
+      sleep --ms=100
+      set-bank-p_ 0
+      if (reg_.read-u8 REGISTER-WHO-AM-I_) != WHO-AM-I_:
+        logger_.error "bus did not recover from reset after 100ms"
+        throw "Bus did not recover from reset after 100ms"
+    write-register_ 0 REGISTER-PWR-MGMT-1_ 1 --mask=PWR-MGMT-1-CLKSEL_
+
+  // Set Sampling Rate
+  set-sample-rate-hz rate-hz/int -> none:
+    assert: 0 < rate-hz <= BASE-RATE-HZ_
+
+    divider := (BASE-RATE-HZ_ / rate-hz) - 1
+    if divider < 0: divider = 0
+    if divider > 0xFFFF: divider = 0xFFFF
+
+    set-gyro-sample-rate-divider_ divider
+    set-accel-sample-rate-divider_ divider
+
+  set-gyro-sample-rate-divider_ divider/int -> none:
+    // Gyro divider is 8-bit
+    write-register_ 2 REGISTER-GYRO-SMPLRT-DIV_ (divider & 0xFF)
+
+  set-accel-sample-rate-divider_ divider/int -> none:
+    // Accel divider is 16-bit
+    write-register_ 2 REGISTER-ACCEL-SMPLRT-DIV-1_ divider --width=16
 
   /**
   Sets the current bank for register reads and writes.
@@ -361,7 +402,7 @@ class Driver:
   Tracks current bank in $bank_ and sets only when necessary, in order to
     reduce traffic on the I2C bus.
   */
-  set-bank_ bank/int:
+  set-bank-p_ bank/int:
     assert: 0 <= bank <= 3
     if bank_ == bank:
       //logger_.debug "bank already set" --tags={"bank":bank}
@@ -369,6 +410,11 @@ class Driver:
     reg_.write-u8 REGISTER-REG-BANK-SEL_ bank << 4
     //logger_.debug "set bank" --tags={"bank":bank}
     bank_ = bank
+
+  set-sleep enable/bool -> none:
+    value := 0
+    if enable: value = 1
+    write-register_ 0 REGISTER-PWR-MGMT-1_ value --mask=PWR-MGMT-1-SLEEP_
 
   /**
   Enables I2C bypass such that AK09916 appears and is reachable on external I2C bus.
@@ -393,8 +439,10 @@ class Driver:
 
   /** Read on-die Thermomenter. */
   read-die-temp -> float:
-    set-bank_ 0
-    raw := reg_.read-bytes REGISTER-TEMP-OUT-H_ 2
+    raw := #[]
+    bank-mutex_.do:
+      set-bank-p_ 0
+      raw = reg_.read-bytes REGISTER-TEMP-OUT-H_ 2
     return ((io.BIG-ENDIAN.int16 raw 0).to-float / 333.87) + 21.0
 
   /**
@@ -405,39 +453,43 @@ class Driver:
     ACCEL_SMPLRT_DIV_1, ACCEL_SMPLRT_DIV_2, I2C_MST_ODR_CONFIG
   */
   set-align-odr_ aligned/bool -> none:
-    set-bank_ 2
     value := 0
     if aligned: value = 1
-    write-register_ REGISTER-ODR-ALIGN-EN_ value
+    write-register_ 2 REGISTER-ODR-ALIGN-EN_ value
     sleep --ms=5
 
   reset-i2c-master_ -> none:
-    set-bank_ 0
-    write-register_ REGISTER-USER-CTRL_ 1 --mask=USER-CTRL-I2C-MST-RST_
+    write-register_ 0 REGISTER-USER-CTRL_ 1 --mask=USER-CTRL-I2C-MST-RST_
     sleep --ms=5
 
   set-i2c-master_ enabled/bool -> none:
-    set-bank_ 0
     value := 0
     if enabled: value = 1
-    write-register_ REGISTER-USER-CTRL_ value --mask=USER-CTRL-I2C-MST-EN_
+    write-register_ 0 REGISTER-USER-CTRL_ value --mask=USER-CTRL-I2C-MST-EN_
 
   set-i2c-bypass-mux_ enabled/bool -> none:
-    set-bank_ 0
     value := 0
     if enabled: value = 1
-    write-register_ REGISTER-INT-PIN-CFG_ value --mask=INT-PIN-CFG-BYPASS-EN_
+    write-register_ 0 REGISTER-INT-PIN-CFG_ value --mask=INT-PIN-CFG-BYPASS-EN_
 
   set-i2c-bus-speed_ speed -> none:
     assert: 0 <= speed <= 15
-    set-bank_ 3
-    write-register_ REGISTER-I2C-MST-CTRL_ speed --mask=I2C-MST-CLK_
+    write-register_ 3 REGISTER-I2C-MST-CTRL_ speed --mask=I2C-MST-CLK_
 
-  set-i2c-master-duty-cycle-mode_ on/bool -> none:
-    set-bank_ 0
+  set-i2c-master-duty-cycle-mode_ enabled/bool -> none:
+    value := 0
+    if enabled: value = 1
+    write-register_ 0 REGISTER-LP-CONFIG_ value --mask=LP-CONFIG-I2C-MST-CYCLE_
+
+  set-accel-duty-cycle-mode_ on/bool -> none:
     value := 0
     if on: value = 1
-    write-register_ REGISTER-LP-CONFIG_ value --mask=LP-CONFIG-I2C-MST-CYCLE_
+    write-register_ 0 REGISTER-LP-CONFIG_ value --mask=LP-CONFIG-I2C-ACCEL-CYCLE_
+
+  set-gyro-duty-cycle-mode_ on/bool -> none:
+    value := 0
+    if on: value = 1
+    write-register_ 0 REGISTER-LP-CONFIG_ value --mask=LP-CONFIG-I2C-GYRO-CYCLE_
 
   /**
   Set ODR for I2C Master.
@@ -450,31 +502,28 @@ class Driver:
   */
   set-i2c-master-duty-odr_ odr/int -> none:
     assert: 0b0000 <= odr <= 0b1111
-    set-bank_ 3
-    write-register_ REGISTER-I2C-MST-ODR-CONFIG_ odr
+    write-register_ 3 REGISTER-I2C-MST-ODR-CONFIG_ odr
 
   /**
   Enables Master Delay for slave $slave.
 
-  When enabled, slave 0 will only be accessed 1/(1+I2C_SLC4_DLY) samples as
+  When enabled, slave x will only be accessed 1/(1+I2C_SLC4_DLY) samples as
     determined by I2C_MST_ODR_CONFIG.
   */
   set-i2c-master-delay_ --slave/int enable/bool -> none:
-    assert: 0 <= slave <= 4
-    set-bank_ 3
+    assert: 0 <= slave <= 3
     mask := 1 << slave
     value := 0
     if enable: value = 1
-    write-register_ REGISTER-I2C-MST-DELAY-CTRL_ value --mask=mask
+    write-register_ 3 REGISTER-I2C-MST-DELAY-CTRL_ value --mask=mask
 
   /**
   Delays shadowing of external sensor data until all data is received.
   */
-  shadow-sensor-only-when-complete_ enable/bool -> none:
-    set-bank_ 3
+  set-i2c-shadow-only-when-complete_ enable/bool -> none:
     value := 0
     if enable: value = 1
-    write-register_ REGISTER-I2C-MST-DELAY-CTRL_ value --mask=I2C-MST-DELAY-ES-SHADOW_
+    write-register_ 3 REGISTER-I2C-MST-DELAY-CTRL_ value --mask=I2C-MST-DELAY-ES-SHADOW_
 
   /**
   Enables magnetometer on slave I2C bus.
@@ -496,11 +545,18 @@ class Driver:
     set-i2c-master_ true
     // Set bus speed to 400Khz
     set-i2c-bus-speed_ 0x07
+    // Meant for duty-cycled behavior (low-power patterns). Off for now.
     set-i2c-master-duty-cycle-mode_ true
     // Set ODR to 137Hz.
     set-i2c-master-duty-odr_ 0x03
     // Enable master delay for this slave.
     set-i2c-master-delay_ --slave=0 true
+
+    set-i2c-shadow-only-when-complete_ true
+
+    // See if I2C Slave is up:
+    logger_.info "Slave responds" --tags={"SLV WHO-AM-I":"0x$(%02x read-slave_ REG-AK09916-DEV-ID_)"}
+
     // Reset Magnetometer Slave.
     write-slave_ REG-AK09916-CONTROL-3_ AK09916-CONTROL-3-SRST_
     // Put Magnetometer Slave into Continuous Mode 4 (100Hz).
@@ -519,29 +575,32 @@ class Driver:
       REG-AK09916-STATUS-2_, which triggers the next data refresh on the
       AK09916. This way the driver will read and use the device prepared in the
       same way the DMP engine needs.
+
+    $I2C-SLVx-CTRL-BYTE-SW_ is also used in that the device is natively little
+      endian, but the ICM20948 (and assuming its reader tool) is big endian.
     */
-    set-slave 0 REG-AK09916-RSV-2_ --size=10
+    set-slave 0 REG-AK09916-RSV-2_ --size=10 --i2c-ctrl=I2C-SLVx-CTRL-BYTE-SW_ | I2C-SLVx-CTRL-GRP_
 
   read-mag -> math.Point3f?:
-    set-bank_ 0
     // Wait for ready, but with a timeout.
     exception := catch:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
-        while (((read-register_ REGISTER-EXT-SLV-DATA-01_ --width=8) & AK09916-STATUS-1-DRDY_) == 0):
+        while (((read-register_ 0 REGISTER-EXT-SLV-DATA-00_ --width=8) & AK09916-STATUS-1-DRDY_) == 0):
           sleep --ms=10   // Was 1ms.
 
     if exception:
       logger_.error "read-mag timed out" --tags={"timeout-ms":COMMAND-TIMEOUT-MS_}
       return null
 
-    ak09916-dor := read-register_ REGISTER-EXT-SLV-DATA-01_ --mask=AK09916-STATUS-1-DOR_
+    ak09916-dor := read-register_ 0 REGISTER-EXT-SLV-DATA-01_ --mask=AK09916-STATUS-1-DOR_
     if ak09916-dor == 1:
       logger_.error "mag reports data overflow" --tags={"status-1":ak09916-dor}
-    ak09916-hofl := read-register_ REGISTER-EXT-SLV-DATA-09_ --mask=AK09916-STATUS-2-HOFL_
+    ak09916-hofl := read-register_ 0 REGISTER-EXT-SLV-DATA-09_ --mask=AK09916-STATUS-2-HOFL_
     if ak09916-hofl == 1:
       logger_.error "mag reports hardware overflow" --tags={"status-2":ak09916-hofl}
 
-    return read-point_ REGISTER-EXT-SLV-DATA-02_ (1.0 / 0.15) --le
+     // using $I2C-SLVx-CTRL-BYTE-SW_ makes --le redundant on the following $read-point_
+    return read-point_ REGISTER-EXT-SLV-DATA-02_ (1.0 / 0.15)
 
   /**
   Reads back the WHOAMI register from the AK09916, for troubleshooting purposes.
@@ -561,8 +620,11 @@ class Driver:
   */
   dump-bytes length/int --reg/int=REGISTER-EXT-SLV-DATA-00_ --bank/int=0 -> ByteArray:
     assert: 0 <= bank <= 3
-    set-bank_ bank
-    return (reg_.read-bytes reg length)
+    out/ByteArray := #[]
+    bank-mutex_.do:
+      set-bank-p_ bank
+      out = reg_.read-bytes reg length
+    return out
 
   /**
   Sets up one of the slaves (SLV0..SLV3) to query from an I2C slave device.
@@ -580,7 +642,6 @@ class Driver:
       --size/int:
     assert: 0 <= size <= 0b1111
 
-    set-bank_ 3
     i2c-slave-addr := REGISTER-I2C-SLV0-ADDR_ + (4 * slave)    // R/W and PHY address of I2C Slave x.
     i2c-slave-reg  := REGISTER-I2C-SLV0-REG_ + (4 * slave)     // I2C slave x register address from where to begin data transfer.
     i2c-slave-ctrl := REGISTER-I2C-SLV0-CTRL_ + (4 * slave)    // BITMASK
@@ -589,19 +650,19 @@ class Driver:
     // Set SLVx to READ the $AK09916-I2C-ADDRESS address.
     if value != null:
       // This is meant to be a command send (eg send content of DO to device).
-      write-register_ i2c-slave-addr (i2c-addr | I2C-SLVx-ADDR-W_)
+      write-register_ 3 i2c-slave-addr (i2c-addr | I2C-SLVx-ADDR-W_)
     else:
       // This is meant to be a read (simply read data at register).
-      write-register_ i2c-slave-addr (i2c-addr | I2C-SLVx-ADDR-R_)
+      write-register_ 3 i2c-slave-addr (i2c-addr | I2C-SLVx-ADDR-R_)
     // Give SLVx the register to be read.
-    write-register_ i2c-slave-reg i2c-reg
+    write-register_ 3 i2c-slave-reg i2c-reg
     // Give SLVx outgoing data (if a specific command send is needed).
     if value != null:
-      write-register_ i2c-slave-data value
+      write-register_ 3 i2c-slave-data value
     // Write control bitmask witn EN to execute the transaction.
     ctrl := ((i2c-ctrl | I2C-SLVx-CTRL-EN_) | size)
-    write-register_ i2c-slave-ctrl ctrl
-    //logger_.debug "set slave" --tags={"slave":slave,"slave-addr":i2c-addr,"slave-reg":i2c-reg,"ctrl":"$(bits-grouped_ ctrl)"}
+    write-register_ 3 i2c-slave-ctrl ctrl
+    logger_.debug "set slave" --tags={"slave":slave,"slave-addr":"$(%02x i2c-addr)","slave-reg":"$(%02x i2c-reg)","ctrl":"$(bits-grouped_ ctrl)"}
 
   /**
   Performs a one-shot read of the I2C slave at address $i2c-addr.
@@ -614,11 +675,10 @@ class Driver:
       --i2c-ctrl/int=0
       --width/int=DEFAULT-REGISTER-WIDTH_:
 
-    set-bank_ 3
     // Set SLV4 to READ the $AK09916-I2C-ADDRESS address.
-    write-register_ REGISTER-I2C-SLV4-ADDR_ (i2c-addr | I2C-SLVx-ADDR-R_)
+    write-register_ 3 REGISTER-I2C-SLV4-ADDR_ (i2c-addr | I2C-SLVx-ADDR-R_)
     // Give SLV4 the register to be read.
-    write-register_ REGISTER-I2C-SLV4-REG_ i2c-reg
+    write-register_ 3 REGISTER-I2C-SLV4-REG_ i2c-reg
 
     // Wait for DONE or NACK (or timeout).  Also record display execution time.
     start := Time.monotonic-us
@@ -629,11 +689,11 @@ class Driver:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
         duration = Duration.of:
           // Write SLV4 control values (+EN bit) to execute.
-          write-register_ REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
+          write-register_ 3 REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
           // Wait for DONE or NAK.
-          set-bank_ 0
+
           while not finished:
-            status-mask = read-register_ REGISTER-I2C-MST-STATUS_
+            status-mask = read-register_ 0 REGISTER-I2C-MST-STATUS_
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
             sleep --ms=10
@@ -651,8 +711,7 @@ class Driver:
         "ms":duration.in-ms}
       return result
 
-    set-bank_ 3
-    result = read-register_ REGISTER-I2C-SLV4-DI_ --width=width
+    result = read-register_ 3 REGISTER-I2C-SLV4-DI_ --width=width
     //logger_.debug "read-slave_ succeeded" --tags={"result":"0x$(%02x result)", "status-mask":"$(bits-grouped_ status-mask)", "ms":duration.in-ms}
     return result
 
@@ -668,14 +727,13 @@ class Driver:
       value/int
       --i2c-ctrl/int=0
       --width/int=DEFAULT-REGISTER-WIDTH_:
-    set-bank_ 3
 
     // SLV4 in WRITE mode (Force 7 bit address without the READ flag).
-    write-register_ REGISTER-I2C-SLV4-ADDR_ ((i2c-addr & 0x7F) | I2C-SLVx-ADDR-W_)
+    write-register_ 3 REGISTER-I2C-SLV4-ADDR_ ((i2c-addr & 0x7F) | I2C-SLVx-ADDR-W_)
     // Give SLV4 the register to be read.
-    write-register_ REGISTER-I2C-SLV4-REG_ i2c-reg
+    write-register_ 3 REGISTER-I2C-SLV4-REG_ i2c-reg
     // Data out (the byte to write).
-    write-register_ REGISTER-I2C-SLV4-DO_ value --width=width
+    write-register_ 3 REGISTER-I2C-SLV4-DO_ value --width=width
 
     // Wait for DONE or NACK (or timeout), same as read-slave_.
     finished := false
@@ -685,11 +743,11 @@ class Driver:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
         duration = Duration.of:
           // Execute the transaction by writing control value (+ EN bit).
-          write-register_ REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
+          write-register_ 3 REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
           // If slave==4, wait for 'DONE' or 'NAK'
-          set-bank_ 0
+          print "finished reg write"
           while not finished:
-            status-mask = read-register_ REGISTER-I2C-MST-STATUS_
+            status-mask = read-register_ 0 REGISTER-I2C-MST-STATUS_
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
             if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
             sleep --ms=25
@@ -697,7 +755,8 @@ class Driver:
     if exception:
       logger_.error "write-slave_ timed out" --tags={
         "status-mask":"$(bits-grouped_ status-mask)",
-        "ms":COMMAND-TIMEOUT-MS_}
+        "ms":COMMAND-TIMEOUT-MS_,
+        "e":exception}
       throw "write-slave_ timed out"
     if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0:
       logger_.error "write-slave_ NAK" --tags={
@@ -715,11 +774,13 @@ class Driver:
   Reads and optionally masks/parses register data. (Little-endian.)
   */
   read-register_
+      bank/int
       register/int
       --mask/int?=null
       --offset/int?=null
       --width/int=DEFAULT-REGISTER-WIDTH_
       --signed/bool=false -> any:
+    assert: 0 <= bank <= 3
     assert: (width == 8) or (width == 16)
     raw/ByteArray := #[]
 
@@ -730,16 +791,18 @@ class Driver:
       offset = mask.count-trailing-zeros
 
     register-value/int? := null
-    if width == 8:
-      if signed:
-        register-value = reg_.read-i8 register
+    bank-mutex_.do:
+      set-bank-p_ bank
+      if width == 8:
+        if signed:
+          register-value = reg_.read-i8 register
+        else:
+          register-value = reg_.read-u8 register
       else:
-        register-value = reg_.read-u8 register
-    else:
-      if signed:
-        register-value = reg_.read-i16-le register
-      else:
-        register-value = reg_.read-u16-le register
+        if signed:
+          register-value = reg_.read-i16-be register
+        else:
+          register-value = reg_.read-u16-be register
 
     if register-value == null:
       logger_.error "read-register_ failed" --tags={"register":register}
@@ -755,12 +818,14 @@ class Driver:
   Writes register data - either masked or full register writes. (Little-endian.)
   */
   write-register_
+      bank/int
       register/int
       value/int
       --mask/int?=null
       --offset/int?=null
       --width/int=DEFAULT-REGISTER-WIDTH_
       --signed/bool=false -> none:
+    assert: 0 <= bank <= 3
     assert: (width == 8) or (width == 16)
     if mask == null:
       if width == 8: mask = 0xFF
@@ -771,39 +836,48 @@ class Driver:
     field-mask/int := (mask >> offset)
     assert: ((value & ~field-mask) == 0)  // fit check
 
+    bank-mutex_.do:
+      set-bank-p_ bank
+
     // Full-width direct write
-    if ((width == 8)  and (mask == 0xFF)  and (offset == 0)) or
-      ((width == 16) and (mask == 0xFFFF) and (offset == 0)):
-      if width == 8:
-        signed ? reg_.write-i8 register (value & 0xFF) : reg_.write-u8 register (value & 0xFF)
-      else:
-        signed ? reg_.write-i16-le register (value & 0xFFFF) : reg_.write-u16-le register (value & 0xFFFF)
-      return
+    bank-mutex_.do:
+      if ((width == 8)  and (mask == 0xFF)  and (offset == 0)) or
+        ((width == 16) and (mask == 0xFFFF) and (offset == 0)):
+        if width == 8:
+          signed ? reg_.write-i8 register (value & 0xFF) : reg_.write-u8 register (value & 0xFF)
+        else:
+          signed ? reg_.write-i16-be register (value & 0xFFFF) : reg_.write-u16-be register (value & 0xFFFF)
+        return
 
     // Read Reg for modification
     old-value/int? := null
-    if width == 8:
-      if signed :
-        old-value = reg_.read-i8 register
+    bank-mutex_.do:
+      set-bank-p_ bank
+      if width == 8:
+        if signed :
+          old-value = reg_.read-i8 register
+        else:
+          old-value = reg_.read-u8 register
       else:
-        old-value = reg_.read-u8 register
-    else:
-      if signed :
-        old-value = reg_.read-i16-le register
-      else:
-        old-value = reg_.read-u16-le register
+        if signed :
+          old-value = reg_.read-i16-be register
+        else:
+          old-value = reg_.read-u16-be register
 
     if old-value == null:
       logger_.error "write-register_ read existing value (for modification) failed" --tags={"register":register}
       throw "write-register_ read failed"
 
     new-value/int := (old-value & ~mask) | ((value & field-mask) << offset)
-    if width == 8:
-      signed ? reg_.write-i8 register new-value : reg_.write-u8 register new-value
-      return
-    else:
-      signed ? reg_.write-i16-le register new-value : reg_.write-u16-le register new-value
-      return
+
+    bank-mutex_.do:
+      set-bank-p_ bank
+      if width == 8:
+        signed ? reg_.write-i8 register new-value : reg_.write-u8 register new-value
+        return
+      else:
+        signed ? reg_.write-i16-be register new-value : reg_.write-u16-be register new-value
+        return
     throw "write-register_: Unhandled Circumstance."
 
   /**
@@ -847,3 +921,285 @@ class Driver:
       i = j
 
     return out
+
+  fifo-start --mag/bool=false --accel/bool=false --gyro/bool=false --temp=false -> none:
+    if not mag and not accel and not gyro and not temp:
+      logger_.error "fifo-start without any selected sensor, doing nothing..."
+      return
+    adapter_ = FifoAdapter_
+      this
+      Reader_ this --logger=logger_
+      --logger=logger_
+    set-sleep false
+    fifo-reset
+    set-fifo-mode false
+    set-sample-rate-hz 1
+    configure-mag
+    fifo-set-mag-data_ mag
+    fifo-set-accel-data_ accel
+    fifo-set-gyro-data_ gyro
+    fifo-set-temp-data_ temp
+    fifo-update-frame-size_
+    fifo-reset
+    fifo-enable_ true
+
+  fifo-stop -> none:
+    if adapter_ == null:
+      logger_.error "fifo not started"
+      return
+    run-stop
+    fifo-enable_ false
+    adapter_ = null
+
+    // Zero enabled FIFO options.
+    write-register_ 0 REGISTER-FIFO-EN-1_ 0x0
+    write-register_ 0 REGISTER-FIFO-EN-2_ 0x0
+
+  fifo-enable_ enable/bool -> none:
+    value := 0
+    if enable: value = 1
+    write-register_ 0 REGISTER-USER-CTRL_ value --mask=USER-CTRL-FIFO-EN_
+
+  run lambda/Lambda -> none:
+    assert: runner_ == null
+    if adapter_ == null:
+      logger_.error "fifo not started"
+      return
+    adapter_.flush
+    runner_ = task::
+      while true:
+        yield
+        frame := adapter_.next-frame
+        lambda.call frame
+
+  run-stop -> none:
+    if runner_ != null:
+      runner_.cancel
+      runner_ = null
+
+  /**
+  Sets FIFO mode - stream or snapshot.
+
+  $snapshot = true is Snapshot mode - FIFO stops when full.
+  */
+  set-fifo-mode snapshot/bool=false -> none:
+    value := 0
+    if snapshot: value = 1
+    write-register_ 0 REGISTER-FIFO-MODE_ value
+
+  /**
+  Enables Slave Data in FIFO output.
+
+  When enabled, $slave's data will be included in FIFO output.  Relevant only
+    for SLV 0..3.  (SLV4 is single-shot reads/writes with its own data outputs.)
+  */
+  fifo-set-slave-data_ --slave/int enable/bool -> none:
+    assert: 0 <= slave <= 3
+    mask := 1 << slave
+    value := 0
+    if enable: value = 1
+    write-register_ 0 REGISTER-FIFO-EN-1_ value --mask=mask
+    fifo-update-frame-size_
+
+  fifo-is-slave-data-set_ --slave/int -> bool:
+    assert: 0 <= slave <= 3
+    mask := 1 << slave
+    return (read-register_ 0 REGISTER-FIFO-EN-1_ --mask=mask) == 1
+
+  /**
+  Set Accelerometer data to be included in FIFO packets.
+  */
+  fifo-set-accel-data_ enable/bool -> none:
+    value := 0
+    if enable: value = 1
+    write-register_ 0 REGISTER-FIFO-EN-2_ value --mask=FIFO-EN-2-ACCEL-EN_
+    fifo-update-frame-size_
+
+  fifo-is-accel-data-set_ -> bool:
+    return (read-register_ 0 REGISTER-FIFO-EN-2_ --mask=FIFO-EN-2-ACCEL-EN_) == 1
+
+  /**
+  Set Gyroscope data to be included in FIFO packets.
+
+  Forced to be treated as three (x, y, and z, are all on or all off).
+  */
+  fifo-set-gyro-data_ enable/bool -> none:
+    value := 0
+    if enable: value = 1
+    write-register_ 0 REGISTER-FIFO-EN-2_ value --mask=FIFO-EN-2-GYRO-Z-EN_
+    write-register_ 0 REGISTER-FIFO-EN-2_ value --mask=FIFO-EN-2-GYRO-Y-EN_
+    write-register_ 0 REGISTER-FIFO-EN-2_ value --mask=FIFO-EN-2-GYRO-X-EN_
+    fifo-update-frame-size_
+
+  fifo-is-gyro-data-set_ -> bool:
+    z/bool := (read-register_ 0 REGISTER-FIFO-EN-2_ --mask=FIFO-EN-2-GYRO-Z-EN_) == 1
+    y/bool := (read-register_ 0 REGISTER-FIFO-EN-2_ --mask=FIFO-EN-2-GYRO-Y-EN_) == 1
+    x/bool := (read-register_ 0 REGISTER-FIFO-EN-2_ --mask=FIFO-EN-2-GYRO-X-EN_) == 1
+    if (x != y) and (y != z):
+      throw "gyro triplet not in sync"
+    return (z and y and z)
+
+  /**
+  Set Magnetometer data to be included in FIFO packets.
+
+  A shortcut function $fifo-set-slave-data_ for slave 0.
+  */
+  fifo-set-mag-data_ enable/bool -> none:
+    fifo-set-slave-data_ --slave=0 enable
+
+  fifo-is-mag-data-set_ -> bool:
+    return fifo-is-slave-data-set_ --slave=0
+
+  /**
+  Set Temperature data to be included in FIFO packets.
+  */
+  fifo-set-temp-data_ enabled/bool -> none:
+    value := 0
+    if enabled: value = 1
+    write-register_ 0 REGISTER-FIFO-EN-2_ value --mask=FIFO-EN-2-TEMP-EN_
+    fifo-update-frame-size_
+
+  fifo-is-temp-data-set_ -> bool:
+    return (read-register_ 0 REGISTER-FIFO-EN-2_ --mask=FIFO-EN-2-TEMP-EN_) == 1
+
+  /**
+  The number of bytes of data in the FIFO queue for the client to pick up.
+  */
+  fifo-available-bytes --frame/int?=null-> int:
+    value := read-register_ 0 REGISTER-FIFO-COUNT_ --width=16
+    if frame != null:
+      value = value - (value % frame)
+    return value
+
+  fifo-read num-bytes/int --max-buffer-size/int=64 -> ByteArray:
+    set-bank-p_ 0
+    return reg_.read-bytes
+      REGISTER-FIFO-R-W_
+      (min max-buffer-size num-bytes)
+
+  /**
+  Reset the FIFO mechanism/buffer.
+  */
+  fifo-reset -> none:
+    // Assert and de-assert for a reset (datasheet).
+    write-register_ 0 REGISTER-FIFO-RST_ 1
+    sleep --ms=5
+    write-register_ 0 REGISTER-FIFO-RST_ 0
+    sleep --ms=5
+
+  fifo-frame-size -> int:
+    return fifo-frame-size_
+
+  fifo-slave-data-size_ --slave/int -> int:
+    assert: 0 <= slave <= 3
+    slave-reg := REGISTER-I2C-SLV0-CTRL_ + (slave * 4)
+    return read-register_ 3 slave-reg --mask=I2C-SLVx-CTRL-LENG_
+
+  fifo-update-frame-size_ -> none:
+    output := 0
+    output += (fifo-is-accel-data-set_ ? 6 : 0)
+    output += (fifo-is-gyro-data-set_ ? 6 : 0)
+    output += (fifo-is-temp-data-set_ ? 2 : 0)
+    4.repeat:
+      output += ((fifo-is-slave-data-set_ --slave=it) ? (fifo-slave-data-size_ --slave=it) : 0)
+    fifo-frame-size_ = output
+    logger_.debug "framesize updated" --tags={"size":fifo-frame-size_}
+
+/**
+Helper class to create an $io.Reader from a $serial.Device.
+*/
+class Reader_ extends io.Reader:
+  static WAIT-BEFORE-NEXT-READ-ATTEMPT_ ::= Duration --ms=5
+  static MAX-BUFFER-SIZE_               ::= 128 // bytes
+
+  logger_/log.Logger
+  driver_/Driver
+  max-buffer-size-aligned_/int := MAX-BUFFER-SIZE_
+  cached-frame-size_/int := 0
+
+  constructor .driver_/Driver --logger/log.Logger=log.default:
+    logger_ = logger.with-name "reader"
+    logger_.info "reader constructed"
+    update-cached-framesize
+
+  update-cached-framesize -> none:
+    if cached-frame-size_ == 0:
+      max-buffer-size-aligned_ = MAX-BUFFER-SIZE_
+    else if driver_.fifo-frame-size != cached-frame-size_:
+      cached-frame-size_ = driver_.fifo-frame-size
+      max-buffer-size-aligned_ = MAX-BUFFER-SIZE_ - (MAX-BUFFER-SIZE_ % cached-frame-size_)
+
+  read_ -> ByteArray?:
+    while true:
+      bytes ::= read__
+      if bytes: return bytes
+      sleep WAIT-BEFORE-NEXT-READ-ATTEMPT_
+
+  read__ -> ByteArray?:
+    update-cached-framesize
+    available-bytes/int ::= driver_.fifo-available-bytes --frame=driver_.fifo-frame-size
+    if available-bytes == 0:
+      return null
+
+    return driver_.fifo-read available-bytes --max-buffer-size=max-buffer-size-aligned_
+
+
+class FifoAdapter_:
+  static STREAM-DELAY_ ::= Duration --ms=1
+  static MAX-BUFFER-RESET-SIZE_ ::= 256 // bytes (hardware is 512)
+  static FIFO-CAPACITY ::= 512 // bytes
+
+  logger_/log.Logger
+  reader_/io.Reader
+  driver_/Driver
+
+  constructor .driver_/Driver .reader_ --logger/log.Logger=log.default:
+    logger_ = logger.with-name "fifoadapter"
+    logger_.info "fifoadapter constructed"
+
+  flush -> none:
+    driver_.fifo-reset
+
+  reset -> none:
+    driver_.fifo-reset
+    wait-until-receiver-available_
+    sleep --ms=50
+    flush
+
+  next-frame -> ByteArray:
+    while true:
+      yield
+      // If the device buffer is too full, dump it, or face desync of frames
+      available := driver_.fifo-available-bytes --frame=driver_.fifo-frame-size
+      if available > MAX-BUFFER-RESET-SIZE_:
+        logger_.warn "fifo near-full (resetting)" --tags={"available": available}
+        flush
+
+      e := catch:
+        if driver_.fifo-available-bytes < driver_.fifo-frame-size:
+          //logger_.debug "waiting for full frame" --tags={"available":driver_.fifo-available-bytes}
+          while driver_.fifo-available-bytes < driver_.fifo-frame-size:
+            sleep --ms=10
+
+        frame := reader_.read-bytes driver_.fifo-frame-size
+        //frame := driver_.fifo-read driver_.fifo-frame-size
+
+        //out-list := []
+        //out-list.add ("[$(frame.size)]".pad --left 5 ' ')
+        //(frame.size / 2).repeat:
+        //  //out-list.add (("$(io.BIG-ENDIAN.uint16 frame (it * 2))").pad --left 10 ' ')
+        //  out-list.add "**"
+        //print out-list
+
+        //print "$(%03d reader_.buffered-size) - $frame"
+        return frame
+      logger_.warn "error obtaining frame" --tags={"error": e}
+
+
+  wait-until-receiver-available_:
+    // Block until we can read from the device.
+    print "Blocking until we can read from the device"
+    first ::= reader_.read
+
+    // Consume all data from the device before continuing (without blocking).
+    flush

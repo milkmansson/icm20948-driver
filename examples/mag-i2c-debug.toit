@@ -20,8 +20,8 @@ main:
   print
 
   bus := i2c.Bus
-    --sda=gpio.Pin 8
-    --scl=gpio.Pin 9
+    --sda=gpio.Pin 19
+    --scl=gpio.Pin 20
     --frequency=400_000
 
   bus-device-count := bus.scan.size
@@ -48,16 +48,16 @@ main:
   ak-sensor.set-operating-mode ak0991x.Ak0991x.OPMODE-CONT-MODE1-10HZ
   sleep --ms=250
   print "Data Ready: $(ak-sensor.is-data-ready)"
-  print "Magnetic Field: $ak-sensor.read-magnetic-field"
-  print "Bearing (no compensation)  : $(%0.3f ak-sensor.read-bearing)"
   print "Current Accel: $sensor.read-accel"
   print "Current Accel: $sensor.read-gyro"
+  print "Magnetic Field: $ak-sensor.read-magnetic-field"
+  print "Bearing (no compensation)  : $(%0.3f ak-sensor.read-bearing)"
   print "Bearing (with compensation): $(%0.3f ak-sensor.read-bearing-fused --accel=sensor.read-accel --gyro=sensor.read-gyro)"
   print
   print "Repating bearing, with tilt compensation from ICM20948.  Get ready..."
   4.repeat:
     sleep --ms=1500
     print "$it \t bearing: $(%0.3f ak-sensor.read-bearing) \t fused: $(%0.3f ak-sensor.read-bearing-fused --accel=sensor.read-accel --gyro=sensor.read-gyro)"
-    print "    raw mag: $ak-sensor.read-magnetic-field"
     print "    raw accel: $sensor.read-accel"
     print "    raw gyro: $sensor.read-gyro"
+    print "    raw mag: $ak-sensor.read-magnetic-field"
