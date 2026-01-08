@@ -35,10 +35,17 @@ main:
   sensor.configure-mag
   print " starting fifo.."
   sensor.fifo-start --accel=true --gyro=true --mag=true --temp=true
-  print " starting runner.."
-  sensor.run (:: print " - $it")
-
-  print " running 10 seconds.."
+  print " starting runner for 10 seconds.."
+  sleep --ms=1000
+  sensor.run (::
+    //print " - $it"
+    out := []
+    out.add ("accel: $(sensor.read-accel it[0..6])".pad --left 40 ' ')
+    out.add ("gyro: $(sensor.read-gyro it[6..12])".pad --left 40 ' ')
+    out.add ("mag: $(sensor.read-mag it[14..20])".pad --left 40 ' ')
+    out.add ("temp: $(%0.3f sensor.read-temp it[20..22])".pad --left 14 ' ')
+    print out
+    )
   sleep --ms=10_000
 
   print " stopping runner.."

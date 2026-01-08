@@ -273,7 +273,6 @@ class Driver:
 
   on:
     tries := 5
-    set-bank-p_ 0
     while (read-register_ 0 REGISTER-WHO-AM-I_) != WHO-AM-I_:
       tries--
       if tries == 0: throw "INVALID_CHIP"
@@ -317,25 +316,41 @@ class Driver:
 
   off:
 
-  read-point_ reg/int sensitivity/float --le/bool=false -> math.Point3f:
-    bytes := #[]
-    bank-mutex_.do:
-      set-bank-p_ 0
-      bytes = reg_.read-bytes reg 6
+  read-point_ reg/int? sensitivity/float --le/bool=false --bytes/ByteArray?=null -> math.Point3f:
+    raw-bytes := #[]
+    if bytes == null:
+      bank-mutex_.do:
+        set-bank-p_ 0
+        raw-bytes = reg_.read-bytes reg 6
+    else:
+      assert: reg == null
+      assert: bytes.size == 6
+      raw-bytes = bytes
+
     if le:
       return math.Point3f
-        (io.LITTLE-ENDIAN.int16 bytes 0) / sensitivity
-        (io.LITTLE-ENDIAN.int16 bytes 2) / sensitivity
-        (io.LITTLE-ENDIAN.int16 bytes 4) / sensitivity
+        (io.LITTLE-ENDIAN.int16 raw-bytes 0) / sensitivity
+        (io.LITTLE-ENDIAN.int16 raw-bytes 2) / sensitivity
+        (io.LITTLE-ENDIAN.int16 raw-bytes 4) / sensitivity
     else:
       return math.Point3f
-        (io.BIG-ENDIAN.int16 bytes 0) / sensitivity
-        (io.BIG-ENDIAN.int16 bytes 2) / sensitivity
-        (io.BIG-ENDIAN.int16 bytes 4) / sensitivity
+        (io.BIG-ENDIAN.int16 raw-bytes 0) / sensitivity
+        (io.BIG-ENDIAN.int16 raw-bytes 2) / sensitivity
+        (io.BIG-ENDIAN.int16 raw-bytes 4) / sensitivity
+  /**
+  Read Accelerometer data.
 
-  read-accel -> math.Point3f?:
+  If $bytes are passed, these are used as source data for the function. (Useful
+    when decoding direct reads, for example, from FIFO output.)
+  */
+  read-accel bytes/ByteArray?=null -> math.Point3f?:
     if accel-sensitivity_ == 0.0:
       throw "ACCEL NOT CONFIGURED"
+
+    // If bytes are supplied do them instead of getting from a reg.
+    if bytes != null:
+      assert: bytes.size == 6
+      return read-point_ null accel-sensitivity_ --bytes=bytes
 
     // Wait for ready, but with a timeout.
     exception := catch:
@@ -349,9 +364,20 @@ class Driver:
 
     return read-point_ REGISTER-ACCEL-XOUT-H_ accel-sensitivity_
 
-  read-gyro -> math.Point3f?:
+  /**
+  Read gyro.
+
+  If 6 $bytes are passed, these are used as source data for the function. (Useful
+    when decoding direct reads, for example, from FIFO output.)
+  */
+  read-gyro bytes/ByteArray=null -> math.Point3f?:
     if gyro-sensitivity_ == 0.0:
       throw "GYRO NOT CONFIGURED"
+
+    // If bytes are supplied use them instead of getting from a reg.
+    if bytes != null:
+      assert: bytes.size == 6
+      return read-point_ null gyro-sensitivity_ --bytes=bytes
 
     // Wait for ready, but with a timeout.
     exception := catch:
@@ -437,12 +463,20 @@ class Driver:
     set-i2c-bypass-mux_ false
     set-i2c-master_ true
 
-  /** Read on-die Thermomenter. */
-  read-die-temp -> float:
+  /**
+  Read temperature from on-die Thermomenter.
+
+  If $bytes are passed, these are used as source data for the function. (Useful
+    when decoding direct reads, for example, from FIFO output.)
+  */
+  read-temp bytes/ByteArray?=null -> float:
+    // If bytes are supplied do them instead of getting from a reg.
     raw := #[]
-    bank-mutex_.do:
-      set-bank-p_ 0
-      raw = reg_.read-bytes REGISTER-TEMP-OUT-H_ 2
+    if bytes != null:
+      assert: bytes.size == 2
+      raw = bytes
+    else:
+      raw = read-register_ 0 REGISTER-TEMP-OUT-H_ --width=16
     return ((io.BIG-ENDIAN.int16 raw 0).to-float / 333.87) + 21.0
 
   /**
@@ -459,13 +493,18 @@ class Driver:
     sleep --ms=5
 
   reset-i2c-master_ -> none:
+    was-running := is-i2c-master-set_
     write-register_ 0 REGISTER-USER-CTRL_ 1 --mask=USER-CTRL-I2C-MST-RST_
     sleep --ms=5
+    if was-running: set-i2c-master_ true
 
   set-i2c-master_ enabled/bool -> none:
     value := 0
     if enabled: value = 1
     write-register_ 0 REGISTER-USER-CTRL_ value --mask=USER-CTRL-I2C-MST-EN_
+
+  is-i2c-master-set_ -> bool:
+    return (read-register_ 0 REGISTER-USER-CTRL_ --mask=USER-CTRL-I2C-MST-EN_) != 0
 
   set-i2c-bypass-mux_ enabled/bool -> none:
     value := 0
@@ -581,7 +620,12 @@ class Driver:
     */
     set-slave 0 REG-AK09916-RSV-2_ --size=10 --i2c-ctrl=I2C-SLVx-CTRL-BYTE-SW_ | I2C-SLVx-CTRL-GRP_
 
-  read-mag -> math.Point3f?:
+  read-mag bytes/ByteArray?=null -> math.Point3f?:
+    // If bytes are supplied do them instead.
+    if bytes != null:
+      assert: bytes.size == 6
+      return read-point_ null (1.0 / 0.15) --bytes=bytes
+
     // Wait for ready, but with a timeout.
     exception := catch:
       with-timeout --ms=COMMAND-TIMEOUT-MS_:
@@ -669,6 +713,7 @@ class Driver:
 
   Function uses SLV4. (SLV4 is for ONE SHOT reads and writes to slave device.)
   */
+  // To-Do: complete the function with '--mask' writes etc like $read-register_.
   read-slave_ -> int?
       i2c-reg/int
       --i2c-addr/int=AK09916-I2C-ADDRESS
@@ -720,7 +765,7 @@ class Driver:
 
   Function uses SLV4. (SLV4 used for ONE SHOT reads and writes to slave device.)
   */
-  // To-Do: complete the function with '--mask' writes etc like $read-register_.
+  // To-Do: complete the function with '--mask' writes etc like $write-register_.
   write-slave_ -> none
       --i2c-addr/int=AK09916-I2C-ADDRESS
       i2c-reg/int
@@ -922,7 +967,12 @@ class Driver:
 
     return out
 
-  fifo-start --mag/bool=false --accel/bool=false --gyro/bool=false --temp/bool=false --sample-rate-hz/int=1 -> none:
+  fifo-start
+      --mag/bool=false
+      --accel/bool=false
+      --gyro/bool=false
+      --temp/bool=false
+      --sample-rate-hz/int=1 -> none:
     if not mag and not accel and not gyro and not temp:
       logger_.error "fifo-start without any selected sensor, doing nothing..."
       return
