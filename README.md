@@ -30,6 +30,8 @@ lambda to be run each time a frame is returned:
 sensor.fifo-start --accel=true --gyro=true --mag=true --temp=true
 
 // The sensor starts the specified lambda for each frame received from the FIFO.
+// Each line uses the driver functions to convert the bytes to their proper
+// formats, using the driver native functions:
 sensor.run (::
   out := []
   out.add ("accel: $(sensor.read-accel it[0..6])".pad --left 40 ' ')
@@ -45,6 +47,16 @@ sleep --ms=5_000
 // This stops the background sensor.run task.
 sensor.run-stop
 ```
+Enabling each feature adds bytes to the resulting frame.  Note that the die
+temperature is not valid for FIFO output when specified on its own.  When all are enabled, each frame is 24 bytes. The outputs are added in the following order:
+- Accelerometer - 6 bytes: x/y/z in big Endian format.
+- Gyroscope - 6 bytes: x/y/z in big Endian format.
+- Magnetometer - 10 bytes: of these, the 6 bytes at [2..6] are the x/y/z data in big-endian format.
+- Die temperature - the last 2 bytes: two bytes in big-endian format.
+
+For conversion from raw counts, see the source code, or the
+[datasheet](https://invensense.tdk.com/wp-content/uploads/2016/06/DS-000189-ICM-20948-v1.3.pdf).
+
 The Output Data Rate can be configured using `.set-sample-rate-hz xxx`, where
 xxx is the number of samples per second.  The slowest the device can go is
 approximately 4.4Hz, supplying numbers lower than 1 has no further effect.
