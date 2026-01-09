@@ -36,7 +36,7 @@ main:
   sensor.configure-mag
   print
   print "Starting 10 reads:"
-  print   " Temperature:  $(%0.2f sensor.read-die-temp) c"
+  print   " Temperature:  $(%0.2f sensor.read-temp) c"
   10.repeat:
     sleep --ms=1000
     print " -------------------------------------------"

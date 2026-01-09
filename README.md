@@ -1,4 +1,4 @@
-# A toit driver for the Ivensense/TDK ICM20948 9-axis MEMS motion sensor.
+# A Toit driver for the Ivensense/TDK ICM20948 9-axis MEMS motion sensor.
 The ICM-20948 is a 9-axis devices, comprising of a native
 gyroscope and acceleromoeter, with a built in instance of an AK09916
 magnetometer.  It has many features.

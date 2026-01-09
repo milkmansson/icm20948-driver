@@ -376,7 +376,7 @@ class Driver:
   If 6 $bytes are passed, these are used as source data for the function. (Useful
     when decoding direct reads, for example, from FIFO output.)
   */
-  read-gyro bytes/ByteArray=null -> math.Point3f?:
+  read-gyro bytes/ByteArray?=null -> math.Point3f?:
     if gyro-sensitivity_ == 0.0:
       throw "GYRO NOT CONFIGURED"
 
@@ -478,13 +478,13 @@ class Driver:
   */
   read-temp bytes/ByteArray?=null -> float:
     // If bytes are supplied do them instead of getting from a reg.
-    raw := #[]
+    raw/int := 0
     if bytes != null:
       assert: bytes.size == 2
-      raw = bytes
+      raw = io.BIG-ENDIAN.int16 bytes 0
     else:
       raw = read-register_ 0 REGISTER-TEMP-OUT-H_ --width=16
-    return ((io.BIG-ENDIAN.int16 raw 0).to-float / 333.87) + 21.0
+    return (raw.to-float / 333.87) + 21.0
 
   /**
   Set ODR Alignment.
@@ -695,7 +695,7 @@ class Driver:
 
     i2c-slave-addr := REGISTER-I2C-SLV0-ADDR_ + (4 * slave)    // R/W and PHY address of I2C Slave x.
     i2c-slave-reg  := REGISTER-I2C-SLV0-REG_ + (4 * slave)     // I2C slave x register address from where to begin data transfer.
-    i2c-slave-ctrl := REGISTER-I2C-SLV0-CTRL_ + (4 * slave)    // BITMASK
+    i2c-slave-ctrl := REGISTER-I2C-SLV0-CTRL_ + (4 * slave)    // BITMASK.
     i2c-slave-data := REGISTER-I2C-SLV0-DO_ + (4 * slave)      // Data out when slave x is set to write.
 
     // Set SLVx to READ the $AK09916-I2C-ADDRESS address.
@@ -1025,11 +1025,11 @@ class Driver:
 
   run lambda/Lambda -> none:
     assert: runner_ == null
-    flush
+    fifo-flush_
     runner_ = task::
       while true:
         yield
-        frame := next-frame
+        frame := fifo-next-frame_
         lambda.call frame
 
   run-stop -> none:
@@ -1150,9 +1150,6 @@ class Driver:
     write-register_ 0 REGISTER-FIFO-RST_ 0
     sleep --ms=5
 
-  fifo-frame-size -> int:
-    return fifo-frame-size_
-
   fifo-slave-data-size_ --slave/int -> int:
     assert: 0 <= slave <= 3
     slave-reg := REGISTER-I2C-SLV0-CTRL_ + (slave * 4)
@@ -1168,51 +1165,29 @@ class Driver:
     fifo-frame-size_ = output
     logger_.debug "framesize updated" --tags={"size":fifo-frame-size_}
 
-/*
-class FifoAdapter_:
-  static STREAM-DELAY_ ::= Duration --ms=1
-  static MAX-BUFFER-RESET-SIZE_ ::= 256 // bytes (hardware is 512)
-  static FIFO-CAPACITY ::= 512 // bytes
-
-  logger_/log.Logger
-  driver_/Driver
-
-  constructor .driver_/Driver --logger/log.Logger=log.default:
-    logger_ = logger.with-name "fifoadapter"
-    logger_.info "fifoadapter constructed"
-*/
-  flush -> none:
-    //driver_.fifo-reset
+  fifo-flush_ -> none:
     fifo-reset
-  /*
-  reset -> none:
-    //driver_.fifo-reset
-    fifo-reset
-    //wait-until-receiver-available_
-    sleep --ms=50
-    flush
-  */
 
-  next-frame -> ByteArray:
+  fifo-next-frame_ -> ByteArray:
     while true:
       yield
       // If the device buffer is too full, dump it, or face desync of frames
-      // available := driver_.fifo-available-bytes --frame=driver_.fifo-frame-size
-      available := fifo-available-bytes --frame=fifo-frame-size
+      available := fifo-available-bytes --frame=fifo-frame-size_
       if available > MAX-BUFFER-RESET-SIZE_:
         logger_.warn "fifo near-full (resetting)" --tags={"available": available}
-        flush
+        fifo-flush_
 
-      e := catch:
-        if fifo-available-bytes < fifo-frame-size:
-          //logger_.debug "waiting for full frame" --tags={"available":driver_.fifo-available-bytes}
-          while fifo-available-bytes < fifo-frame-size:
+      exception := catch:
+        if fifo-available-bytes < fifo-frame-size_:
+          while fifo-available-bytes < fifo-frame-size_:
             sleep --ms=10
 
-        frame := fifo-read fifo-frame-size
+        frame := fifo-read fifo-frame-size_
 
         return frame
-      logger_.warn "error obtaining frame" --tags={"error": e}
+
+      // If we get here, an error occurred.
+      logger_.warn "error obtaining frame" --tags={"error": exception}
 
 
   wait-until-receiver-available_:
@@ -1221,4 +1196,4 @@ class FifoAdapter_:
     first ::= fifo-read fifo-available-bytes
 
     // Consume all data from the device before continuing (without blocking).
-    flush
+    fifo-flush_
