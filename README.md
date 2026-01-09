@@ -45,14 +45,20 @@ sleep --ms=5_000
 // This stops the background sensor.run task.
 sensor.run-stop
 ```
+The Output Data Rate can be configured using `.set-sample-rate-hz xxx`, where
+xxx is the number of samples per second.  The slowest the device can go is
+approximately 4.4Hz, supplying numbers lower than 1 has no further effect.
 
 ### Auxiliary Bus:
-If the use case requires direct I2C access to the AX09916, the device has the
-capability of exposing it on the I2C bus alongside the ICM20948.  To do this,
-use `enable-i2c-bypass`.  (Reverse it by using `disable-i2c-bypass`.)  A
-separate driver will be required to access it, such as the
-[AK0991x Driver](https://github.com/milkmansson/toit-ak0991x).
+Internally, the device accesses the magnetometer on an auxiliary I2C bus.  The
+device has the capability of exposing direct wired I2C access to the AX09916.
+This is bypass mode - it essentially sits on the I2C bus alongside the ICM20948,
+and is discoverable and can be interacted with directly.  To do this, use
+`enable-i2c-bypass`.  (Reverse it by using `disable-i2c-bypass`.)  As with any
+other device, a separate driver is required to access/use it, such as this
+[AK0991x](https://github.com/milkmansson/toit-ak0991x) driver.
 
-Note that synchronisation of measurements isn't possible, and onboard features
-using the magnetometer, (like DMP etc) will not be available whilst in this
-mode.  (An example use of this is given in this [example](./examples/mag-i2c-bypass.toit).
+Note that in this mode, synchronisation of measurements isn't possible, and
+onboard features using the magnetometer, (like DMP etc) will not be available
+whilst in this mode.  (An example of how to use this mode is given in
+[this example](./examples/mag-i2c-bypass.toit).)
