@@ -246,6 +246,10 @@ class Driver:
   static WIDTH-16_ ::= 16
   static DEFAULT-REGISTER-WIDTH_ ::= WIDTH-8_
 
+  // When FIFO buffer in ICM20948 grows past this, we are headingn towards
+  // overflow and frame desync.
+  static MAX-BUFFER-RESET-SIZE_ ::= 256 // bytes (hardware is 512).
+
   // I2C Slave Write Timeout
   static COMMAND-TIMEOUT-MS_ ::= 1000
 
@@ -260,8 +264,6 @@ class Driver:
   fifo-frame-size_/int := 0
   bank-mutex_ := monitor.Mutex
 
-
-  adapter_/FifoAdapter_? := null
 
   constructor device/serial.Device --logger/log.Logger=log.default:
     dev_ = device
@@ -316,6 +318,9 @@ class Driver:
     logger_.debug "gyroscope configured"
 
   off:
+    run-stop
+    fifo-stop
+    reset-i2c-master_
 
   read-point_ reg/int? sensitivity/float --le/bool=false --bytes/ByteArray?=null -> math.Point3f:
     raw-bytes := #[]
@@ -796,7 +801,6 @@ class Driver:
             // Execute the transaction by writing control value (+ EN bit).
             reg_.write-u8 REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
             // If slave==4, wait for 'DONE' or 'NAK'
-            print "finished reg write"
             set-bank-p_ 0
             while not finished:
               status-mask = reg_.read-u8 REGISTER-I2C-MST-STATUS_
@@ -823,7 +827,10 @@ class Driver:
 
 
   /**
-  Reads and optionally masks/parses register data. (Little-endian.)
+  Reads and optionally masks/parses register data.
+
+  This implementation is Big Endian, and enforces a mutex to prevent banks being
+    changed mid-write.
   */
   read-register_
       bank/int
@@ -867,7 +874,10 @@ class Driver:
       return masked-value
 
   /**
-  Writes register data - either masked or full register writes. (Little-endian.)
+  Writes register data - either masked or full register writes.
+
+  This implementation is Big Endian, and enforces a mutex to prevent banks being
+    changed mid-read.
   */
   write-register_
       bank/int
@@ -982,10 +992,7 @@ class Driver:
     if not mag and not accel and not gyro and not temp:
       logger_.error "fifo-start without any selected sensor, doing nothing..."
       return
-    adapter_ = FifoAdapter_
-      this
-      Reader_ this --logger=logger_
-      --logger=logger_
+    //adapter_ = FifoAdapter_ this --logger=logger_
     set-sleep false
     fifo-reset
     set-fifo-mode false
@@ -997,16 +1004,14 @@ class Driver:
     if gyro: configure-gyro
     fifo-set-gyro-data_ gyro
     fifo-set-temp-data_ temp
-    fifo-reset
     fifo-enable_ true
 
   fifo-stop -> none:
-    if adapter_ == null:
-      logger_.error "fifo not started"
-      return
+    //if adapter_ == null:
+    //  logger_.error "fifo not started"
+    //  return
     run-stop
     fifo-enable_ false
-    adapter_ = null
 
     // Zero enabled FIFO options.
     fifo-frame-size_ = 0
@@ -1020,14 +1025,11 @@ class Driver:
 
   run lambda/Lambda -> none:
     assert: runner_ == null
-    if adapter_ == null:
-      logger_.error "fifo not started"
-      return
-    adapter_.flush
+    flush
     runner_ = task::
       while true:
         yield
-        frame := adapter_.next-frame
+        frame := next-frame
         lambda.call frame
 
   run-stop -> none:
@@ -1166,93 +1168,49 @@ class Driver:
     fifo-frame-size_ = output
     logger_.debug "framesize updated" --tags={"size":fifo-frame-size_}
 
-/**
-Helper class to create an $io.Reader from a $serial.Device.
-*/
-class Reader_ extends io.Reader:
-  static WAIT-BEFORE-NEXT-READ-ATTEMPT_ ::= Duration --ms=5
-  static MAX-BUFFER-SIZE_               ::= 128 // bytes
-
-  logger_/log.Logger
-  driver_/Driver
-  max-buffer-size-aligned_/int := MAX-BUFFER-SIZE_
-  cached-frame-size_/int := 0
-
-  constructor .driver_/Driver --logger/log.Logger=log.default:
-    logger_ = logger.with-name "reader"
-    logger_.info "reader constructed"
-    update-cached-framesize
-
-  update-cached-framesize -> none:
-    if cached-frame-size_ == 0:
-      max-buffer-size-aligned_ = MAX-BUFFER-SIZE_
-    else if driver_.fifo-frame-size != cached-frame-size_:
-      cached-frame-size_ = driver_.fifo-frame-size
-      max-buffer-size-aligned_ = MAX-BUFFER-SIZE_ - (MAX-BUFFER-SIZE_ % cached-frame-size_)
-
-  read_ -> ByteArray?:
-    while true:
-      bytes ::= read__
-      if bytes: return bytes
-      sleep WAIT-BEFORE-NEXT-READ-ATTEMPT_
-
-  read__ -> ByteArray?:
-    update-cached-framesize
-    available-bytes/int ::= driver_.fifo-available-bytes --frame=driver_.fifo-frame-size
-    if available-bytes == 0:
-      return null
-
-    return driver_.fifo-read available-bytes --max-buffer-size=max-buffer-size-aligned_
-
-
+/*
 class FifoAdapter_:
   static STREAM-DELAY_ ::= Duration --ms=1
   static MAX-BUFFER-RESET-SIZE_ ::= 256 // bytes (hardware is 512)
   static FIFO-CAPACITY ::= 512 // bytes
 
   logger_/log.Logger
-  reader_/io.Reader
   driver_/Driver
 
-  constructor .driver_/Driver .reader_ --logger/log.Logger=log.default:
+  constructor .driver_/Driver --logger/log.Logger=log.default:
     logger_ = logger.with-name "fifoadapter"
     logger_.info "fifoadapter constructed"
-
+*/
   flush -> none:
-    driver_.fifo-reset
-
+    //driver_.fifo-reset
+    fifo-reset
+  /*
   reset -> none:
-    driver_.fifo-reset
-    wait-until-receiver-available_
+    //driver_.fifo-reset
+    fifo-reset
+    //wait-until-receiver-available_
     sleep --ms=50
     flush
+  */
 
   next-frame -> ByteArray:
     while true:
       yield
       // If the device buffer is too full, dump it, or face desync of frames
-      available := driver_.fifo-available-bytes --frame=driver_.fifo-frame-size
+      // available := driver_.fifo-available-bytes --frame=driver_.fifo-frame-size
+      available := fifo-available-bytes --frame=fifo-frame-size
       if available > MAX-BUFFER-RESET-SIZE_:
         logger_.warn "fifo near-full (resetting)" --tags={"available": available}
         flush
 
       e := catch:
-        if driver_.fifo-available-bytes < driver_.fifo-frame-size:
+        if fifo-available-bytes < fifo-frame-size:
           //logger_.debug "waiting for full frame" --tags={"available":driver_.fifo-available-bytes}
-          while driver_.fifo-available-bytes < driver_.fifo-frame-size:
+          while fifo-available-bytes < fifo-frame-size:
             sleep --ms=10
 
-        frame := reader_.read-bytes driver_.fifo-frame-size
-        //frame := driver_.fifo-read driver_.fifo-frame-size
+        frame := fifo-read fifo-frame-size
 
-        //out-list := []
-        //out-list.add ("[$(frame.size)]".pad --left 5 ' ')
-        //(frame.size / 2).repeat:
-        //  //out-list.add (("$(io.BIG-ENDIAN.uint16 frame (it * 2))").pad --left 10 ' ')
-        //  out-list.add "**"
-        //print out-list
-
-        //print "$(%03d reader_.buffered-size) - $frame"
         return frame
       logger_.warn "error obtaining frame" --tags={"error": e}
 
@@ -1260,7 +1218,7 @@ class FifoAdapter_:
   wait-until-receiver-available_:
     // Block until we can read from the device.
     print "Blocking until we can read from the device"
-    first ::= reader_.read
+    first ::= fifo-read fifo-available-bytes
 
     // Consume all data from the device before continuing (without blocking).
     flush
