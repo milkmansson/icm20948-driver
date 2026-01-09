@@ -49,10 +49,12 @@ sensor.run-stop
 ```
 Enabling each feature adds bytes to the resulting frame.  Note that the die
 temperature is not valid for FIFO output when specified on its own.  When all are enabled, each frame is 24 bytes. The outputs are added in the following order:
-- Accelerometer - 6 bytes: x/y/z in big Endian format.
-- Gyroscope - 6 bytes: x/y/z in big Endian format.
-- Magnetometer - 10 bytes: of these, the 6 bytes at [2..6] are the x/y/z data in big-endian format.
-- Die temperature - the last 2 bytes: two bytes in big-endian format.
+| Precedence | Data | Bytes | Description |
+| - | - | - | - |
+| 1 | Accelerometer | 6 bytes | x/y/z (int16's in big endian format). |
+| 2 | Gyroscope | 6 bytes | x/y/z (int16's in big endian format). |
+| 3 | Magnetometer | 10 bytes | Of these, the 6 bytes at [2..6] are the x/y/z (int16's in big endian format) |
+| 4 | Die/chip temperature | final 2 bytes | Two bytes, an int16 in big-endian format. |
 
 For conversion from raw counts, see the source code, or the
 [datasheet](https://invensense.tdk.com/wp-content/uploads/2016/06/DS-000189-ICM-20948-v1.3.pdf).
