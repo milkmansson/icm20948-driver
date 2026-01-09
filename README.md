@@ -28,16 +28,18 @@ lambda to be run each time a frame is returned:
 ```Toit
 // Start the fifo specifying which functions should be in the result frame.
 sensor.fifo-start --accel=true --gyro=true --mag=true --temp=true
-
-// The sensor starts the specified lambda for each frame received from the FIFO.
-// Each line uses the driver functions to convert the bytes to their proper
-// formats, using the driver native functions:
+```
+The sensor starts the specified lambda for each frame received from the FIFO.
+The frame is `it` in each execution of the lambda.  Each line here shows a
+'slice' of the frame being passed it to the driver functions which convert the
+bytes to their proper formats using the driver native functions:
+```
 sensor.run (::
   out := []
-  out.add ("accel: $(sensor.read-accel it[0..6])".pad --left 40 ' ')
-  out.add ("gyro: $(sensor.read-gyro it[6..12])".pad --left 40 ' ')
-  out.add ("mag: $(sensor.read-mag it[14..20])".pad --left 40 ' ')
-  out.add ("temp: $(%0.3f sensor.read-temp it[20..22])".pad --left 14 ' ')
+  out.add "accel: $(sensor.read-accel it[0..6])"
+  out.add "gyro: $(sensor.read-gyro it[6..12])"
+  out.add "mag: $(sensor.read-mag it[14..20])"
+  out.add "temp: $(sensor.read-temp it[20..22])"
   print out)
 
 // This is run as a separate task, and therefore we wait 5 seconds to see some
