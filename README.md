@@ -11,13 +11,13 @@ For complete examples, see [examples folder](./examples/)
 ### Standard Functions: 9-axis
 The basic accelerometer and gyroscope functions are exposed using `.read-accel`
 and `.read-gyro`.  These will return Point3f's of the x/y/z vector.  Before
-running these functions, they must be configured using `configure-gyro` and
-`configure-accel`.
+running these functions, each function must be configured using `configure-gyro`
+and `configure-accel`.
 
-The ICM20948 hardware implementation of the compass/magnetometer component is
-quite different, however this is handled in this driver with similar functions.
-To use the magenetometer, use `.read-mag`.  This requires setup first, using
-`.configure-mag`.
+For the final three axes -, the ICM20948 hardware implementation of the compass/
+magnetometer component is quite different, however this is handled in this
+driver with similar functions.  To use the magenetometer, use `.read-mag`.
+This requires setup first, using `.configure-mag`.
 
 ### FIFO:
 Basic FIFO handling is implemented in this driver.  (The driver assumes that the
