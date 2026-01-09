@@ -291,6 +291,7 @@ class Driver:
     //configure-gyro  --scale=GYRO-SCALE-250DPS
     //configure-mag   // No user selectable scale applies.
 
+
   configure-accel --scale/int=ACCEL-SCALE-2G:
     set-accel-duty-cycle-mode_ true
 
@@ -402,6 +403,7 @@ class Driver:
         logger_.error "bus did not recover from reset after 100ms"
         throw "Bus did not recover from reset after 100ms"
     write-register_ 0 REGISTER-PWR-MGMT-1_ 1 --mask=PWR-MGMT-1-CLKSEL_
+
 
   // Set Sampling Rate
   set-sample-rate-hz rate-hz/int -> none:
@@ -751,7 +753,7 @@ class Driver:
         "ms":duration.in-ms}
       return result
     if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0:
-      logger_.error "write-slave_ NAK" --tags={
+      logger_.error "read-slave_ NAK" --tags={
         "status-mask":"$(bits-grouped_ status-mask)",
         "ms":duration.in-ms}
       return result
@@ -773,29 +775,34 @@ class Driver:
       --i2c-ctrl/int=0
       --width/int=DEFAULT-REGISTER-WIDTH_:
 
-    // SLV4 in WRITE mode (Force 7 bit address without the READ flag).
-    write-register_ 3 REGISTER-I2C-SLV4-ADDR_ ((i2c-addr & 0x7F) | I2C-SLVx-ADDR-W_)
-    // Give SLV4 the register to be read.
-    write-register_ 3 REGISTER-I2C-SLV4-REG_ i2c-reg
-    // Data out (the byte to write).
-    write-register_ 3 REGISTER-I2C-SLV4-DO_ value --width=width
-
-    // Wait for DONE or NACK (or timeout), same as read-slave_.
-    finished := false
-    status-mask := 0x0
+    exception := null
     duration := Duration.ZERO
-    exception := catch:
-      with-timeout --ms=COMMAND-TIMEOUT-MS_:
-        duration = Duration.of:
-          // Execute the transaction by writing control value (+ EN bit).
-          write-register_ 3 REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
-          // If slave==4, wait for 'DONE' or 'NAK'
-          print "finished reg write"
-          while not finished:
-            status-mask = read-register_ 0 REGISTER-I2C-MST-STATUS_
-            if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
-            if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
-            sleep --ms=25
+    status-mask := 0
+    bank-mutex_.do:
+      set-bank-p_ 3
+      // SLV4 in WRITE mode (Force 7 bit address without the READ flag).
+      reg_.write-u8 REGISTER-I2C-SLV4-ADDR_ ((i2c-addr & 0x7F) | I2C-SLVx-ADDR-W_)
+      // Give SLV4 the register to be read.
+      reg_.write-u8 REGISTER-I2C-SLV4-REG_ i2c-reg
+      // Data out (the byte to write).
+      reg_.write-u8 REGISTER-I2C-SLV4-DO_ value
+
+      // Wait for DONE or NACK (or timeout), same as read-slave_.
+      finished := false
+      duration = Duration.ZERO
+      exception = catch:
+        with-timeout --ms=COMMAND-TIMEOUT-MS_:
+          duration = Duration.of:
+            // Execute the transaction by writing control value (+ EN bit).
+            reg_.write-u8 REGISTER-I2C-SLV4-CTRL_ (i2c-ctrl | I2C-SLVx-CTRL-EN_)
+            // If slave==4, wait for 'DONE' or 'NAK'
+            print "finished reg write"
+            set-bank-p_ 0
+            while not finished:
+              status-mask = reg_.read-u8 REGISTER-I2C-MST-STATUS_
+              if (status-mask & I2C-MST-STATUS-I2C-SLV4-DONE_) != 0: finished = true
+              if (status-mask & I2C-MST-STATUS-I2C-SLV4-NAK_) != 0: finished = true
+              sleep --ms=25
 
     if exception:
       logger_.error "write-slave_ timed out" --tags={
@@ -881,11 +888,13 @@ class Driver:
     field-mask/int := (mask >> offset)
     assert: ((value & ~field-mask) == 0)  // fit check
 
+    // Entire lot must be run under one mutex to ensure no other process
+    // can interfere before the write is complete.
     bank-mutex_.do:
+      // Set Bank
       set-bank-p_ bank
 
-    // Full-width direct write
-    bank-mutex_.do:
+      // Short path for a full-width write.
       if ((width == 8)  and (mask == 0xFF)  and (offset == 0)) or
         ((width == 16) and (mask == 0xFFFF) and (offset == 0)):
         if width == 8:
@@ -894,10 +903,8 @@ class Driver:
           signed ? reg_.write-i16-be register (value & 0xFFFF) : reg_.write-u16-be register (value & 0xFFFF)
         return
 
-    // Read Reg for modification
-    old-value/int? := null
-    bank-mutex_.do:
-      set-bank-p_ bank
+      // Register modification path.
+      old-value/int? := null
       if width == 8:
         if signed :
           old-value = reg_.read-i8 register
@@ -909,20 +916,19 @@ class Driver:
         else:
           old-value = reg_.read-u16-be register
 
-    if old-value == null:
-      logger_.error "write-register_ read existing value (for modification) failed" --tags={"register":register}
-      throw "write-register_ read failed"
+      if old-value == null:
+        logger_.error "write-register_ read existing value (for modification) failed" --tags={"register":register}
+        throw "write-register_ read failed"
 
-    new-value/int := (old-value & ~mask) | ((value & field-mask) << offset)
+      new-value/int := (old-value & ~mask) | ((value & field-mask) << offset)
 
-    bank-mutex_.do:
-      set-bank-p_ bank
       if width == 8:
         signed ? reg_.write-i8 register new-value : reg_.write-u8 register new-value
         return
       else:
         signed ? reg_.write-i16-be register new-value : reg_.write-u16-be register new-value
         return
+
     throw "write-register_: Unhandled Circumstance."
 
   /**
@@ -1124,10 +1130,13 @@ class Driver:
     return value
 
   fifo-read num-bytes/int --max-buffer-size/int=64 -> ByteArray:
-    set-bank-p_ 0
-    return reg_.read-bytes
-      REGISTER-FIFO-R-W_
-      (min max-buffer-size num-bytes)
+    bytes := #[]
+    bank-mutex_.do:
+      set-bank-p_ 0
+      bytes = reg_.read-bytes
+        REGISTER-FIFO-R-W_
+        (min max-buffer-size num-bytes)
+    return bytes
 
   /**
   Reset the FIFO mechanism/buffer.
