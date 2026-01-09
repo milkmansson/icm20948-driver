@@ -3,7 +3,7 @@
 // in the LICENSE file.
 
 /**
-A simple example of how to use the ICM20948 driver.
+A simple example of how to use the megnetometer via the ICM20948 driver.
 */
 
 import gpio

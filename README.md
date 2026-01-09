@@ -14,12 +14,13 @@ and `.read-gyro`.  These will return Point3f's of the x/y/z vector.  Before
 running these functions, each function must be configured using `configure-gyro`
 and `configure-accel`.
 
-For the final three axes -, the ICM20948 hardware implementation of the compass/
-magnetometer component is quite different, however this is handled in this
-driver with similar functions.  To use the magenetometer, use `.read-mag`.
-This requires setup first, using `.configure-mag`.
+For the final three axes - the ICM20948 hardware implementation of the
+compass/magnetometer is quite different.  An auxiliary I2V bus exists internally
+to access this data.  This complication is handled in this driver with similar
+functions.  To use the magenetometer, use `.read-mag`.  This requires setup
+first, using `.configure-mag`.
 
-### FIFO:
+### FIFO
 Basic FIFO handling is implemented in this driver.  (The driver assumes that the
 magnetometer is the onboard AK09916, and no other devices are connected to the
 AUX I2C bus.)  The usage patterns are in the examples. Essentially, after
@@ -33,7 +34,7 @@ The sensor starts the specified lambda for each frame received from the FIFO.
 The frame is `it` in each execution of the lambda.  Each line here shows a
 'slice' of the frame being passed it to the driver functions which convert the
 bytes to their proper formats using the driver native functions:
-```
+```toit
 sensor.run (::
   out := []
   out.add "accel: $(sensor.read-accel it[0..6])"
@@ -56,25 +57,38 @@ temperature is not valid for FIFO output when specified on its own.  When all ar
 | 1 | Accelerometer | 6 bytes | x/y/z (int16's in big endian format). |
 | 2 | Gyroscope | 6 bytes | x/y/z (int16's in big endian format). |
 | 3 | Magnetometer | 10 bytes | Of these, the 6 bytes at [2..6] are the x/y/z (int16's in big endian format) |
-| 4 | Die/chip temperature | final 2 bytes | Two bytes, an int16 in big-endian format. |
+| 4 | Die/chip temperature | 2 bytes | Two bytes, an int16 in big-endian format. |
 
 For conversion from raw counts, see the source code, or the
 [datasheet](https://invensense.tdk.com/wp-content/uploads/2016/06/DS-000189-ICM-20948-v1.3.pdf).
 
 The Output Data Rate can be configured using `.set-sample-rate-hz xxx`, where
 xxx is the number of samples per second.  The slowest the device can go is
-approximately 4.4Hz, supplying numbers lower than 1 has no further effect.
+approximately 4.4Hz, supplying numbers lower than 4 has no further effect.
 
-### Auxiliary Bus:
+### Auxiliary Bus
 Internally, the device accesses the magnetometer on an auxiliary I2C bus.  The
-device has the capability of exposing direct wired I2C access to the AX09916.
-This is bypass mode - it essentially sits on the I2C bus alongside the ICM20948,
-and is discoverable and can be interacted with directly.  To do this, use
-`enable-i2c-bypass`.  (Reverse it by using `disable-i2c-bypass`.)  As with any
-other device, a separate driver is required to access/use it, such as this
+device has the capability of exposing direct wired I2C access to the
+magnetometer (an AX09916).  This is bypass mode - it essentially sits on the I2C
+bus alongside the ICM20948, and is discoverable and can be interacted with
+directly.  To do this, use `enable-i2c-bypass`.  (Reverse it by using
+`disable-i2c-bypass`.)  As with any other device, a separate driver is required
+to access/use it, such as this
 [AK0991x](https://github.com/milkmansson/toit-ak0991x) driver.
 
 Note that in this mode, synchronisation of measurements isn't possible, and
 onboard features using the magnetometer, (like DMP etc) will not be available
 whilst in this mode.  (An example of how to use this mode is given in
 [this example](./examples/mag-i2c-bypass.toit).)
+
+### Wake on Motion
+This use essentially is the accelerometer running in a low-power mode.  In the
+background, the hardware compares samples, and if movement exceeds a threshold
+the WOM interrupt is raised on INT1.  It is intended to allow the ESP32 to sleep
+most of the time and wake it up when the IMU detects motion.  The datasheet
+calls out a dedicated Wake on Motion Interrupt source.  This feature uses
+accelerometer data only.
+
+The interrupt is used with the interrupt pin directly connected to a pin on the
+ESP32.  Then use `set-wom true`.  Disable it using `set-wom false`.
+Thresholds can be set using `set-wom-threshold`.
