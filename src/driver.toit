@@ -1030,7 +1030,7 @@ class Driver:
         return
 
       // Read Reg for modification:
-      old-value/int := (width == 8) ? reg_.read-u8 register : reg_.read-u16-le register
+      old-value/int := (width == 8) ? reg_.read-u8 register : reg_.read-u16-be register
       reg-mask/int := (width == 8) ? 0xFF : 0xFFFF
       new-value/int := (old-value & ~mask) | ((value & field-mask) << offset) & reg-mask
 
