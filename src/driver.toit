@@ -826,12 +826,12 @@ class Driver:
     //  "ms":duration.in-ms}
 
 
-  /**
+  /*
   Reads and optionally masks/parses register data.
 
   This implementation is Big Endian, and enforces a mutex to prevent banks being
     changed mid-write.
-  */
+
   read-register_
       bank/int
       register/int
@@ -872,13 +872,13 @@ class Driver:
     else:
       masked-value := (register-value & mask) >> offset
       return masked-value
+  */
 
-  /**
+  /*
   Writes register data - either masked or full register writes.
 
   This implementation is Big Endian, and enforces a mutex to prevent banks being
     changed mid-read.
-  */
   write-register_
       bank/int
       register/int
@@ -940,6 +940,106 @@ class Driver:
         return
 
     throw "write-register_: Unhandled Circumstance."
+  */
+
+  /**
+  Reads and optionally masks/parses register data. (Big-endian.)
+  */
+  read-register_ -> int
+      bank/int
+      register/int
+      --mask/int?=null
+      --offset/int?=null
+      --width/int=DEFAULT-REGISTER-WIDTH_
+      --signed/bool=false:
+    assert: 0 <= bank <= 3
+    assert: (width == 8) or (width == 16)
+
+    if not mask: mask = (width == 8) ? 0xFF : 0xFFFF
+    if not offset: offset = mask.count-trailing-zeros
+
+    if width == 8: assert: (mask & ~0xFF) == 0
+    else: assert: (mask & ~0xFFFF) == 0
+    assert: mask != 0
+
+    full_width := (offset == 0) and ((width == 8 and mask == 0xFF) or (width == 16 and mask == 0xFFFF))
+    if signed and not full_width:
+      throw "masked signed read not supported (need sign-extension by field width)"
+
+    register-value/int? := null
+    bank-mutex_.do:
+      set-bank-p_ bank
+      if width == 8:
+        register-value = signed ? reg_.read-i8 register : reg_.read-u8 register
+      else:
+        register-value = signed ? reg_.read-i16-be register : reg_.read-u16-be register
+
+    if full-width:
+      return register-value
+
+    return (register-value & mask) >> offset
+
+  /**
+  Writes register data - either masked or full register writes. (Big-endian.)
+  */
+  write-register_ -> none
+      bank/int
+      register/int
+      value/int
+      --mask/int?=null
+      --offset/int?=null
+      --width/int=DEFAULT-REGISTER-WIDTH_
+      --signed/bool=false:
+    assert: 0 <= bank <= 3
+    assert: (width == 8) or (width == 16)
+
+    if not mask: mask = (width == 8) ? 0xFF : 0xFFFF
+    if not offset: offset = mask.count-trailing-zeros
+
+    // Check mask fits register width:
+    if width == 8: assert: (mask & ~0xFF) == 0
+    else: assert: (mask & ~0xFFFF) == 0
+
+    // Determine if write is full width:
+    full-width := (offset == 0) and ((width == 8 and mask == 0xFF) or (width == 16 and mask == 0xFFFF))
+
+    // For now don't accept negative numbers as masked writes.
+    if signed and not full-width:
+      throw "masked signed write not supported (encode to field bits first)"
+
+    // Mask must fit within the register width:
+    field-mask/int := mask >> offset
+    assert: field-mask != 0
+
+    // Check an unsigned write is actually > 0:
+    if not signed:
+      assert: value >= 0 and value <= field-mask
+    else:
+      if width == 8: assert: -128 <= value and value <= 127
+      else: assert: -32768 <= value and value <= 32767
+
+    bank-mutex_.do:
+      set-bank-p_ bank
+
+      // Full-width direct write:
+      if full-width:
+        if width == 8:
+          signed ? reg_.write-i8 register value : reg_.write-u8 register value
+        else:
+          signed ? reg_.write-i16-be register value : reg_.write-u16-be register value
+        return
+
+      // Read Reg for modification:
+      old-value/int := (width == 8) ? reg_.read-u8 register : reg_.read-u16-le register
+      reg-mask/int := (width == 8) ? 0xFF : 0xFFFF
+      new-value/int := (old-value & ~mask) | ((value & field-mask) << offset) & reg-mask
+
+      // Write modified value:
+      if width == 8:
+        reg_.write-u8 register new-value
+      else:
+        reg_.write-u16-be register new-value
+
 
   /**
   Provides strings to display bitmasks nicely when testing.
