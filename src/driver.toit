@@ -962,8 +962,8 @@ class Driver:
     else: assert: (mask & ~0xFFFF) == 0
     assert: mask != 0
 
-    full_width := (offset == 0) and ((width == 8 and mask == 0xFF) or (width == 16 and mask == 0xFFFF))
-    if signed and not full_width:
+    full-width := (offset == 0) and ((width == 8 and mask == 0xFF) or (width == 16 and mask == 0xFFFF))
+    if signed and not full-width:
       throw "masked signed read not supported (need sign-extension by field width)"
 
     register-value/int? := null
