@@ -30,7 +30,7 @@ class Driver:
 
   static REGISTER-REG-BANK-SEL_   ::= 0x7F
 
-  // Bank 0
+  // Bank 0.
   static REGISTER-WHO-AM-I_       ::= 0x00
   static REGISTER-USER-CTRL_      ::= 0x03
   static REGISTER-LP-CONFIG_      ::= 0x05
@@ -71,7 +71,6 @@ class Driver:
   static REGISTER-EXT-SLV-DATA-07_ ::= 0x42
   static REGISTER-EXT-SLV-DATA-08_ ::= 0x43
   static REGISTER-EXT-SLV-DATA-09_ ::= 0x44
-  //...
   static REGISTER-EXT-SLV-DATA-23_ ::= 0x52
 
   static REGISTER-FIFO-EN-1_        ::= 0x66
@@ -145,32 +144,31 @@ class Driver:
   // SLV4: one-shot command channel - Perform single, blocking I²C transactions
   //   (writes or reads).  Result goes into $REGISTER-I2C-SLV4-DI_.
   //   Must wait for 'DONE' from I2C-MST-STATUS.
-  static REGISTER-I2C-SLV0-ADDR_      ::= 0x03  // R/W and PHY address of I2C Slave x.
+  static REGISTER-I2C-SLV0-ADDR_      ::= 0x03  // R/W [7] and PHY address [0..6] of I2C Slave x.
   static REGISTER-I2C-SLV0-REG_       ::= 0x04  // I2C slave x register address from where to begin data transfer.
-  static REGISTER-I2C-SLV0-CTRL_      ::= 0x05  //
+  static REGISTER-I2C-SLV0-CTRL_      ::= 0x05  // Bitmask of properties for the read.
   static REGISTER-I2C-SLV0-DO_        ::= 0x06  // Data out when slave x is set to write.
 
-  static REGISTER-I2C-SLV1-ADDR_      ::= 0x07
+  static REGISTER-I2C-SLV1-ADDR_      ::= 0x07  // As $REGISTER-I2C-SLV0-ADDR_ for Slave 1.
   static REGISTER-I2C-SLV1-REG_       ::= 0x08
   static REGISTER-I2C-SLV1-CTRL_      ::= 0x09
   static REGISTER-I2C-SLV1-DO_        ::= 0x0A
 
-  static REGISTER-I2C-SLV2-ADDR_      ::= 0x0B
+  static REGISTER-I2C-SLV2-ADDR_      ::= 0x0B  // As $REGISTER-I2C-SLV0-ADDR_ for Slave 2.
   static REGISTER-I2C-SLV2-REG_       ::= 0x0C
   static REGISTER-I2C-SLV2-CTRL_      ::= 0x0D
   static REGISTER-I2C-SLV2-DO_        ::= 0x0E
 
-  static REGISTER-I2C-SLV3-ADDR_      ::= 0x0F
+  static REGISTER-I2C-SLV3-ADDR_      ::= 0x0F  // As $REGISTER-I2C-SLV0-ADDR_ for Slave 3.
   static REGISTER-I2C-SLV3-REG_       ::= 0x10
   static REGISTER-I2C-SLV3-CTRL_      ::= 0x11
   static REGISTER-I2C-SLV3-DO_        ::= 0x12
 
-  static REGISTER-I2C-SLV4-ADDR_      ::= 0x13
+  static REGISTER-I2C-SLV4-ADDR_      ::= 0x13  // As $REGISTER-I2C-SLV0-ADDR_ for Slave 4.
   static REGISTER-I2C-SLV4-REG_       ::= 0x14
   static REGISTER-I2C-SLV4-CTRL_      ::= 0x15
   static REGISTER-I2C-SLV4-DO_        ::= 0x16  // Data OUT when slave 4 is set to write.
-  static REGISTER-I2C-SLV4-DI_        ::= 0x17  // Data IN when slave 4.
-
+  static REGISTER-I2C-SLV4-DI_        ::= 0x17  // Data IN when slave 4 is set to read.
 
   // Masks: $REGISTER-INT-PIN-CFG_
   static INT-PIN-CFG-INT1-ACTL_             ::= 0b10000000
@@ -241,17 +239,32 @@ class Driver:
   // Sampling Rate Constants.
   static BASE-RATE-HZ_/int ::= 1125
 
-  // $write-register_ statics for bit width.  All 16 bit read/writes are LE.
+  // $write-register_ statics for bit width.
+  // NOTE: All 16 bit read/writes to ICM20948 are BE.
+  //       AK09916 is a LITTLE ENDIAN device.  This is handled here in the
+  //       code.  See Programmers Notes in README.md.
   static WIDTH-8_ ::= 8
   static WIDTH-16_ ::= 16
   static DEFAULT-REGISTER-WIDTH_ ::= WIDTH-8_
 
   // When FIFO buffer in ICM20948 grows past this, we are headingn towards
-  // overflow and frame desync.
+  // overflow and frame desync.  Hardware is 512 byes.  Limit is set here lower,
+  // if the buffer backs up to 256, we are already going too slow.
   static MAX-BUFFER-RESET-SIZE_ ::= 256 // bytes (hardware is 512).
 
   // I2C Slave Write Timeout
   static COMMAND-TIMEOUT-MS_ ::= 1000
+
+  // Masks: REGISTER-I2C-SLVX-ADDR_ [x=0..4].
+  static I2C-SLVX-ADDR-R_      ::= 0b10000000  // 1 = transfer is R for slave x
+  static I2C-SLVX-ADDR-I2C-ID_ ::= 0b01111111  // PHY address of I2C slave x
+
+  // Masks: REGISTER-I2C-SLVX-CTRL_ [x=0..4].
+  static I2C-SLVX-CTRL-EN_      ::= 0b10000000  // Enable reading data from this slave at the sample rate and storing data at the first available EXT_SENS_DATA register, which is always EXT_SENS_DATA_00 for I 2C slave 0
+  static I2C-SLVX-CTRL-BYTE-SW_ ::= 0b01000000  // 1 – Swap bytes when reading both the low and high byte of a word.
+  static I2C-SLVX-CTRL-REG-DIS_ ::= 0b00100000  // Disables writing the register value - when set it will only read/write data.
+  static I2C-SLVX-CTRL-GRP_     ::= 0b00010000  // Whether 16 bit byte reads are 00..01 or 01..02.
+  static I2C-SLVX-CTRL-LENG_    ::= 0b00001111  // Number of bytes to be read from I2C slave X.
 
   accel-sensitivity_/float := 0.0
   gyro-sensitivity_/float := 0.0
@@ -459,7 +472,7 @@ class Driver:
     Software oriented fusion could still be done, however, as the MCU must
     manage timing there is no synchronization with accel/gyro.  The bus will
     conflict if it is misconfigured.  The mode prevents DMP fusion.  This mode
-    also prevents access to AK09916 data over SPI.
+    also prevents access to the I2C-only AK09916, when using the 20948 over SPI.
   */
   enable-i2c-bypass -> none:
     set-i2c-master_ false
@@ -953,23 +966,24 @@ class Driver:
       --width/int=DEFAULT-REGISTER-WIDTH_
       --signed/bool=false:
     assert: 0 <= bank <= 3
-    assert: (width == 8) or (width == 16)
+    assert: (width == WIDTH-8_) or (width == WIDTH-16_)
 
     if not mask: mask = (width == 8) ? 0xFF : 0xFFFF
     if not offset: offset = mask.count-trailing-zeros
 
-    if width == 8: assert: (mask & ~0xFF) == 0
-    else: assert: (mask & ~0xFFFF) == 0
+    assert:
+      if width == WIDTH-8_: (mask & ~0xff) == 0
+      else: (mask & ~0xffff) == 0
     assert: mask != 0
 
-    full-width := (offset == 0) and ((width == 8 and mask == 0xFF) or (width == 16 and mask == 0xFFFF))
+    full-width := (offset == 0) and ((width == WIDTH-8_ and mask == 0xFF) or (width == WIDTH-16_ and mask == 0xFFFF))
     if signed and not full-width:
       throw "masked signed read not supported (need sign-extension by field width)"
 
     register-value/int? := null
     bank-mutex_.do:
       set-bank-p_ bank
-      if width == 8:
+      if width == WIDTH-8_:
         register-value = signed ? reg_.read-i8 register : reg_.read-u8 register
       else:
         register-value = signed ? reg_.read-i16-be register : reg_.read-u16-be register
@@ -991,17 +1005,18 @@ class Driver:
       --width/int=DEFAULT-REGISTER-WIDTH_
       --signed/bool=false:
     assert: 0 <= bank <= 3
-    assert: (width == 8) or (width == 16)
+    assert: (width == WIDTH-8_) or (width == WIDTH-16_)
 
-    if not mask: mask = (width == 8) ? 0xFF : 0xFFFF
+    if not mask: mask = (width == WIDTH-8_) ? 0xff : 0xffff
     if not offset: offset = mask.count-trailing-zeros
 
     // Check mask fits register width:
-    if width == 8: assert: (mask & ~0xFF) == 0
-    else: assert: (mask & ~0xFFFF) == 0
+    assert:
+      if width == WIDTH-8_: (mask & ~0xff) == 0
+      else: (mask & ~0xffff) == 0
 
     // Determine if write is full width:
-    full-width := (offset == 0) and ((width == 8 and mask == 0xFF) or (width == 16 and mask == 0xFFFF))
+    full-width := (offset == 0) and ((width == WIDTH-8_ and mask == 0xff) or (width == WIDTH-16_ and mask == 0xffff))
 
     // For now don't accept negative numbers as masked writes.
     if signed and not full-width:
@@ -1023,23 +1038,22 @@ class Driver:
 
       // Full-width direct write:
       if full-width:
-        if width == 8:
+        if width == WIDTH-8_:
           signed ? reg_.write-i8 register value : reg_.write-u8 register value
         else:
           signed ? reg_.write-i16-be register value : reg_.write-u16-be register value
         return
 
       // Read Reg for modification:
-      old-value/int := (width == 8) ? reg_.read-u8 register : reg_.read-u16-be register
-      reg-mask/int := (width == 8) ? 0xFF : 0xFFFF
+      old-value/int := (width == WIDTH-8_) ? reg_.read-u8 register : reg_.read-u16-be register
+      reg-mask/int := (width == WIDTH-8_) ? 0xFF : 0xFFFF
       new-value/int := (old-value & ~mask) | ((value & field-mask) << offset) & reg-mask
 
       // Write modified value:
-      if width == 8:
+      if width == WIDTH-8_:
         reg_.write-u8 register new-value
       else:
         reg_.write-u16-be register new-value
-
 
   /**
   Provides strings to display bitmasks nicely when testing.
