@@ -15,9 +15,9 @@ running these functions, each function must be configured using `configure-gyro`
 and `configure-accel`.
 
 For the final three axes - the ICM20948 hardware implementation of the
-compass/magnetometer is quite different.  An auxiliary I2V bus exists internally
-to access this data.  This complication is handled in this driver with similar
-functions.  To use the magenetometer, use `.read-mag`.  This requires setup
+compass/magnetometer is quite different.  An auxiliary I2C bus exists internally
+to access this device/data.  This complication is handled in this driver.  To
+access the magenetometer, use `.read-mag`.  Similarly, this requires setup
 first, using `.configure-mag`.
 
 ### FIFO
